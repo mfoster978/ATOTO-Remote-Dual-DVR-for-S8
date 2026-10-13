@@ -75,7 +75,7 @@ if ($LASTEXITCODE -ne 0) { throw 'd8 failed' }
 & (Join-Path $BuildTools 'aapt2.exe') compile --dir (Join-Path $ProjectRoot 'app\res') -o $CompiledResources
 if ($LASTEXITCODE -ne 0) { throw 'aapt2 resource compile failed' }
 
-& (Join-Path $BuildTools 'aapt2.exe') link -o $Unsigned -I $AndroidJar --manifest (Join-Path $ProjectRoot 'app\AndroidManifest.xml') -R $CompiledResources -A $PackagedAssets --min-sdk-version 26 --target-sdk-version 33 --version-code 20001 --version-name 2.0.1
+& (Join-Path $BuildTools 'aapt2.exe') link -o $Unsigned -I $AndroidJar --manifest (Join-Path $ProjectRoot 'app\AndroidManifest.xml') -R $CompiledResources -A $PackagedAssets --min-sdk-version 26 --target-sdk-version 33 --version-code 20002 --version-name 2.0.2
 if ($LASTEXITCODE -ne 0) { throw 'aapt2 link failed' }
 
 & (Join-Path $JavaRoot 'bin\jar.exe') uf $Unsigned -C $Dex classes.dex
@@ -96,4 +96,4 @@ if ($LASTEXITCODE -ne 0) { throw 'apksigner failed' }
 if ($LASTEXITCODE -ne 0) { throw 'APK verification failed' }
 
 Write-Output $Signed
-Copy-Item -LiteralPath $Signed -Destination (Join-Path $ProjectRoot 'Camera-Link-Viewer-v2.0.1.apk') -Force
+Copy-Item -LiteralPath $Signed -Destination (Join-Path $ProjectRoot 'Camera-Link-Viewer-v2.0.2.apk') -Force

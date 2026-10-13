@@ -10,10 +10,10 @@ The release contains two APKs:
 The intended radio setup is one factory DVR update plus one new app, Tailscale. Camera Link is no longer installed as a second DVR app on the radio.
 
 > [!IMPORTANT]
-> Remote live viewing while the vehicle is off is **not working yet**. On the tested radio, ATOTO's factory parking mode continues recording when it keeps the DVR powered, but Tailscale and the remote camera connection currently go offline after ACC-off. A safe solution is still being investigated. Version 2.0.1 stops all Camera Link services at ACC-off and leaves ATOTO's original DVR alone to handle parking, battery cutoff, and MCU power.
+> Remote live viewing while the vehicle is off is **not working yet**. On the tested radio, ATOTO's factory parking mode continues recording when it keeps the DVR powered, but Tailscale and the remote camera connection currently go offline after ACC-off. A safe solution is still being investigated. Version 2.0.2 stops all Camera Link services at ACC-off and leaves ATOTO's original DVR alone to handle parking, battery cutoff, and MCU power.
 
 > [!CAUTION]
-> Do not install the withdrawn v1.5 or v1.6 experiments. Those versions attempted to manage S8 ACC-off behavior outside the factory DVR and caused factory resets during testing. Version 2.0.1 never writes the vendor parking flag or MCU keep-awake heartbeat, never keeps Camera Link or Tailscale alive during ACC-off, and blocks delayed camera commands during the power transition.
+> Do not install the withdrawn v1.5 or v1.6 experiments. Those versions attempted to manage S8 ACC-off behavior outside the factory DVR and caused factory resets during testing. Version 2.0.2 contains no custom parking, sentry, battery-voltage, or MCU keep-awake code. It also removes Camera Link's partial wake lock, stops its services at ACC-off, and blocks delayed camera commands during the power transition.
 
 This is an independent community project. It is not made, supported, or endorsed by ATOTO or Tailscale.
 
@@ -39,7 +39,7 @@ ATOTO's own [parking recording comparison](https://www.atotodirect.com/blogs/gui
 
 - Remote live Front, DVR Camera 2, Reverse, and split-camera views through a private Tailscale connection.
 - Continuous reverse-camera H.264 MP4 recording alongside whichever shared DVR input ATOTO is recording.
-- Reverse clips in the factory DVR recordings screen with an **R** badge and native playback.
+- Reverse clips in the factory DVR recordings screen with an **R** badge, an **R** filter beside **ALL/F/C**, and native playback.
 - **REVERSE**, **SPLIT**, and **LINK** controls over the native DVR camera view.
 - Split view cycle: top/bottom, left/right, then off.
 - The factory camera button remains responsible for switching Front and DVR Camera 2.
@@ -48,6 +48,7 @@ ATOTO's own [parking recording comparison](https://www.atotodirect.com/blogs/gui
 - Setup QR, app connection PIN, browser username/password, and named vehicle profiles.
 - Optional owner PIN. One successful unlock opens every protected factory DVR and Camera Link screen for 10 minutes. Screen changes and briefly leaving the app do not ask again; the timer or a radio restart relocks it. Live camera viewing and the factory emergency-lock button remain available while locked.
 - Automatic recording recovery when the stock DVR opens before its camera signal state is initialized.
+- Automatic Camera Link server recovery after ACC-on, plus phone live-view retries while the radio and Tailscale reconnect.
 - Signed one-click update checks for both APKs through GitHub Releases.
 
 ## Hardware limit
@@ -76,7 +77,7 @@ Camera images, private addresses, credentials, GPS coordinates, and personal rec
 
 ## Tested radio
 
-Version 2.0.1 was built for this unit:
+Version 2.0.2 was built and installed on this unit:
 
 | Property | Tested value |
 | --- | --- |
@@ -93,22 +94,22 @@ Other S8 models and firmware builds may use different camera IDs, storage mounts
 
 ## Install on the radio
 
-1. Download **`ATOTO-S8-Enhanced-Stock-DVR-v2.0.1.apk`** from the latest GitHub Release.
+1. Download **`ATOTO-S8-Enhanced-Stock-DVR-v2.0.2.apk`** from the latest GitHub Release.
 2. Install it on the radio as an update to the existing ATOTO DVR. Do not uninstall the factory DVR first; the package data and original app identity must remain available.
 3. Open **DVR**. The familiar ATOTO camera screen and settings remain in place.
 4. Tap **LINK** to open the added side menu.
 5. Install the included Tailscale APK, sign in, and connect the radio to the same tailnet used by the phone.
 6. Open **Phone connection & QR** and leave the QR code visible for phone setup.
 7. Enable reverse recording only if the reverse camera has a confirmed live picture.
-8. Configure parking mode, duration, and battery cutoff in ATOTO's original DVR settings. The added code only reads whether factory parking is armed; it does not change those controls.
+8. Configure parking mode, duration, and battery cutoff in ATOTO's original DVR settings. The added code does not read or change those controls.
 
 Wireless ADB is needed only to install or service the radio APK when the normal package installer is unavailable. It is not required for daily recording, phone viewing, or playback after setup.
 
-The release uses version code `210001` and version name `2.0.1-camera-link` for the enhanced radio package so Android and the in-app updater recognize it as newer than v2.0.0.
+The release uses version code `210002` and version name `2.0.2-camera-link` for the enhanced radio package so Android and the in-app updater recognize it as newer than v2.0.1.
 
 ## Install on the phone or tablet
 
-1. Download **`Camera-Link-Viewer-v2.0.1.apk`** from the same release.
+1. Download **`Camera-Link-Viewer-v2.0.2.apk`** from the same release.
 2. Install Tailscale from the Play Store or use the installer offered by Camera Link Viewer.
 3. Sign in to the same tailnet as the radio and approve Android's VPN request.
 4. Open Camera Link Viewer and scan the setup QR shown on the radio.
@@ -123,6 +124,8 @@ The native ATOTO recordings screen remains the main radio library. Its **All** v
 - factory Front/DVR2 daily and emergency clips;
 - completed Camera Link Reverse clips, marked **R**;
 - locked/protected clips.
+
+Use the factory **F**, **C**, and added **R** buttons to show Front, DVR Camera 2, or Reverse clips by themselves. Reverse thumbnails are identified by a visible **R** badge.
 
 The factory video player handles playback on the radio. The phone app lists the same completed recordings through the private radio server and uses its own native player. A clip that is still being written appears after the segment closes.
 
@@ -148,7 +151,9 @@ The radio connection page shows the website username and password. The app conne
 
 ATOTO's factory DVR remains the sole owner of parking mode, parking duration, battery cutoff, and MCU power commands. On the tested radio, parking recording works when the factory parking setting keeps the DVR powered after ACC-off.
 
-Remote live viewing after ACC-off is a separate problem. The tested radio currently takes Tailscale and the Camera Link remote endpoint offline even while the factory parking recorder continues. Version 2.0.1 explicitly stops Camera Link at ACC-off and does not attempt to defeat that power transition. Work on a safe solution will require preserving network access without writing undocumented MCU power state.
+Remote live viewing after ACC-off is a separate problem. The tested radio currently takes Tailscale and the Camera Link remote endpoint offline even while the factory parking recorder continues. Version 2.0.2 explicitly stops Camera Link at ACC-off and does not attempt to defeat that power transition. Its added code does not read or change ATOTO's parking, sentry, battery-voltage, or MCU keep-awake controls.
+
+At the next ACC-on, Camera Link starts the server again, requests Tailscale reconnection, and performs delayed recovery checks for the radio's asynchronous startup. The phone viewer keeps retrying its private stream during that startup instead of remaining on a failed first connection.
 
 ## Updates
 
@@ -167,7 +172,7 @@ The phone/tablet viewer can be built on Windows with Android SDK build tools, Po
 ./build.ps1
 ```
 
-The script verifies the pinned ZXing and official Tailscale dependencies, compiles the source, signs the viewer, and writes `Camera-Link-Viewer-v2.0.1.apk`.
+The script verifies the pinned ZXing and official Tailscale dependencies, compiles the source, signs the viewer, and writes `Camera-Link-Viewer-v2.0.2.apk`.
 
 The radio build is an additive patch applied to a compatible factory DVR APK:
 

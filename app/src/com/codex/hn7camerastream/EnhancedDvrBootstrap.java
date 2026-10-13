@@ -16,11 +16,10 @@ public final class EnhancedDvrBootstrap {
         app.getSharedPreferences("settings", Context.MODE_PRIVATE).edit()
                 .putString("device_mode", "radio").apply();
 
-        AtotoParkingBridge vehicle = new AtotoParkingBridge();
-        int acc = vehicle.readAccStatus();
+        int acc = new AtotoAccState().read();
         if (acc != 1) {
-            // The factory DVR alone owns parking mode. Camera Link must never
-            // extend the package lifetime or request VPN during ACC-off.
+            // Camera Link must never extend the package lifetime or request
+            // VPN during ACC-off.
             try { app.stopService(new Intent(app, CameraStreamService.class)); }
             catch (RuntimeException ignored) { }
             Log.i(TAG, "Enhanced services remain stopped until confirmed ACC-on: " + acc);

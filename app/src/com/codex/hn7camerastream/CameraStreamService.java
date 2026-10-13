@@ -44,9 +44,7 @@ import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.IBinder;
 import android.os.Looper;
-import android.os.PowerManager;
 import android.os.StatFs;
-import android.provider.Settings;
 import android.util.Base64;
 import android.util.Log;
 import android.view.SurfaceHolder;
@@ -62,6 +60,7 @@ import java.io.OutputStream;
 import java.io.RandomAccessFile;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
@@ -108,7 +107,7 @@ public class CameraStreamService extends Service implements SensorEventListener,
     private static final String EXTRA_ATOTO_DVR_RECORD_STATE = "dvr_state";
     private static final long SYSTEM_UI_RECORDING_RECONCILE_MS = 5_000L;
     private static final long CONFIGURED_RECORDING_RETRY_MS = 10_000L;
-    private static final long PARKING_STATE_POLL_MS = 2_000L;
+    private static final long ACC_STATE_POLL_MS = 2_000L;
     private static volatile CameraStreamService runningInstance;
 
     private final ExecutorService clients = Executors.newCachedThreadPool();
@@ -157,7 +156,6 @@ public class CameraStreamService extends Service implements SensorEventListener,
     private boolean audioEnabledForSegment;
     private long recordingStartNs;
     private byte[] i420Buffer;
-    private PowerManager.WakeLock wakeLock;
     private FrontPipeline frontPipeline;
     private MicrophoneHub microphoneHub;
     private SensorManager sensorManager;
@@ -173,33 +171,30 @@ public class CameraStreamService extends Service implements SensorEventListener,
     private volatile Location latestLocation;
     private final Object watermarkLock = new Object();
     private WatermarkFrame watermarkFrame;
-    private final Handler parkingHandler = new Handler(Looper.getMainLooper());
-    private AtotoParkingBridge parkingBridge;
+    private final Handler serviceHandler = new Handler(Looper.getMainLooper());
+    private AtotoAccState accState;
     private BroadcastReceiver accReceiver;
     private volatile boolean ignitionOn;
-    private volatile boolean parkingActive;
-    private volatile float vehicleBatteryVoltage = -1f;
-    private volatile String parkingStatus = "Checking ignition state";
     private Boolean lastPublishedSystemUiRecordingState;
 
     private final Runnable systemUiRecordingReconciler = new Runnable() {
         @Override public void run() {
             publishSystemUiRecordingState(isActivelyRecording(), true);
-            parkingHandler.postDelayed(this, SYSTEM_UI_RECORDING_RECONCILE_MS);
+            serviceHandler.postDelayed(this, SYSTEM_UI_RECORDING_RECONCILE_MS);
         }
     };
 
     private final Runnable configuredRecordingReconciler = new Runnable() {
         @Override public void run() {
             retryConfiguredRecordings();
-            parkingHandler.postDelayed(this, CONFIGURED_RECORDING_RETRY_MS);
+            serviceHandler.postDelayed(this, CONFIGURED_RECORDING_RETRY_MS);
         }
     };
 
-    private final Runnable parkingStateSupervisor = new Runnable() {
+    private final Runnable accStateSupervisor = new Runnable() {
         @Override public void run() {
-            superviseParkingState();
-            parkingHandler.postDelayed(this, PARKING_STATE_POLL_MS);
+            superviseAccState();
+            serviceHandler.postDelayed(this, ACC_STATE_POLL_MS);
         }
     };
 
@@ -236,12 +231,11 @@ public class CameraStreamService extends Service implements SensorEventListener,
         createNotificationChannel();
         startForeground(NOTIFICATION_ID, buildNotification("Waiting for a viewer"));
 
-        // Check the vendor ACC state before creating camera workers, sensors,
-        // a server, or a wake lock. Unknown is treated as off on the radio.
-        initializeParkingController();
+        // Check the read-only ACC state before creating camera workers, sensors,
+        // or a server. Unknown is treated as off on the radio.
+        initializeAccSafetyGate();
         if (!ignitionOn) {
-            parkingStatus = "ACC is not confirmed on; Camera Link is stopped";
-            Log.i(TAG, parkingStatus);
+            Log.i(TAG, "ACC is not confirmed on; Camera Link is stopped");
             stopForeground(true);
             stopSelf();
             return;
@@ -253,10 +247,10 @@ public class CameraStreamService extends Service implements SensorEventListener,
         frontPipeline = new FrontPipeline();
         microphoneHub = new MicrophoneHub();
         publishSystemUiRecordingState(false, true);
-        parkingHandler.removeCallbacks(systemUiRecordingReconciler);
-        parkingHandler.postDelayed(systemUiRecordingReconciler, SYSTEM_UI_RECORDING_RECONCILE_MS);
-        parkingHandler.removeCallbacks(configuredRecordingReconciler);
-        parkingHandler.postDelayed(configuredRecordingReconciler, CONFIGURED_RECORDING_RETRY_MS);
+        serviceHandler.removeCallbacks(systemUiRecordingReconciler);
+        serviceHandler.postDelayed(systemUiRecordingReconciler, SYSTEM_UI_RECORDING_RECONCILE_MS);
+        serviceHandler.removeCallbacks(configuredRecordingReconciler);
+        serviceHandler.postDelayed(configuredRecordingReconciler, CONFIGURED_RECORDING_RETRY_MS);
         sensorManager = (SensorManager) getSystemService(SENSOR_SERVICE);
         if (sensorManager != null) {
             accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
@@ -267,11 +261,8 @@ public class CameraStreamService extends Service implements SensorEventListener,
         }
         startLocationTracking();
 
-        PowerManager power = (PowerManager) getSystemService(POWER_SERVICE);
-        wakeLock = power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "HN7CameraStream:server");
-        wakeLock.acquire();
-        parkingHandler.removeCallbacks(parkingStateSupervisor);
-        parkingHandler.postDelayed(parkingStateSupervisor, PARKING_STATE_POLL_MS);
+        serviceHandler.removeCallbacks(accStateSupervisor);
+        serviceHandler.postDelayed(accStateSupervisor, ACC_STATE_POLL_MS);
         startServer();
         requestTailscaleConnect();
 
@@ -364,7 +355,8 @@ public class CameraStreamService extends Service implements SensorEventListener,
         } else if (intent != null && ACTION_EMERGENCY_LOCK.equals(intent.getAction())) {
             triggerEmergencyLock("vehicle G-sensor");
         } else if (intent != null && ACTION_BOOTSTRAP_RETRY.equals(intent.getAction())) {
-            Log.i(TAG, "Visible boot bootstrap requested camera recording retry");
+            Log.i(TAG, "ACC-on recovery requested server and recording retry");
+            requestTailscaleConnect();
             resumeConfiguredRecordings();
         }
         if (!running) startServer();
@@ -381,10 +373,9 @@ public class CameraStreamService extends Service implements SensorEventListener,
     @Override
     public void onDestroy() {
         if (runningInstance == this) runningInstance = null;
-        parkingHandler.removeCallbacks(systemUiRecordingReconciler);
-        parkingHandler.removeCallbacks(configuredRecordingReconciler);
-        parkingHandler.removeCallbacks(parkingStateSupervisor);
-        parkingActive = false;
+        serviceHandler.removeCallbacks(systemUiRecordingReconciler);
+        serviceHandler.removeCallbacks(configuredRecordingReconciler);
+        serviceHandler.removeCallbacks(accStateSupervisor);
         if (accReceiver != null) {
             try { unregisterReceiver(accReceiver); } catch (Throwable ignored) { }
             accReceiver = null;
@@ -404,7 +395,6 @@ public class CameraStreamService extends Service implements SensorEventListener,
         encoder.shutdownNow();
         recorderExecutor.shutdownNow();
         if (cameraThread != null) cameraThread.quitSafely();
-        if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
         stopForeground(true);
         super.onDestroy();
     }
@@ -417,18 +407,16 @@ public class CameraStreamService extends Service implements SensorEventListener,
         triggerEmergencyLock("vehicle G-sensor");
     }
 
-    private void initializeParkingController() {
-        // The platform-signed factory DVR remains the sole owner of ACC-off,
-        // the MCU sentry heartbeat, and voltage cutoff. Camera Link only reads
-        // state so it can get out of the shutdown path.
-        parkingBridge = new AtotoParkingBridge();
-        int acc = parkingBridge.readAccStatus();
+    private void initializeAccSafetyGate() {
+        accState = new AtotoAccState();
+        int acc = accState.read();
         ignitionOn = !requiresConfirmedAcc() || acc == 1;
-        vehicleBatteryVoltage = parkingBridge.readBatteryVoltage();
         accReceiver = new BroadcastReceiver() {
             @Override public void onReceive(Context context, Intent intent) {
                 if (!ACTION_ATOTO_ACC.equals(intent.getAction())) return;
-                handleAccState(intent.getBooleanExtra("AccStatus", true));
+                boolean accOn = intent.getBooleanExtra("AccStatus", true);
+                AtotoAccState.noteBroadcast(accOn);
+                handleAccState(accOn);
             }
         };
         IntentFilter filter = new IntentFilter(ACTION_ATOTO_ACC);
@@ -436,53 +424,26 @@ public class CameraStreamService extends Service implements SensorEventListener,
             if (Build.VERSION.SDK_INT >= 33) registerReceiver(accReceiver, filter, Context.RECEIVER_EXPORTED);
             else registerReceiver(accReceiver, filter);
         } catch (Throwable error) {
-            parkingStatus = "ACC receiver unavailable: " + error.getClass().getSimpleName();
-            Log.w(TAG, parkingStatus, error);
+            Log.w(TAG, "ACC receiver unavailable: " + error.getClass().getSimpleName(), error);
         }
-        applyParkingSettings();
     }
 
     private void handleAccState(boolean isOn) {
         ignitionOn = isOn;
         if (isOn) {
-            parkingActive = false;
-            parkingStatus = "Ignition on";
-            ensureWakeLock();
             resumeConfiguredRecordings();
             requestTailscaleConnect();
             updateNotification("Camera server running");
         } else {
-            // Do not participate in parking mode. In particular, do not keep a
-            // camera, server, wake lock, alarm, or VPN request alive while the
-            // MCU is suspending Android. The original VideoService continues
-            // independently and applies ATOTO's duration/voltage settings.
-            parkingActive = false;
-            parkingStatus = "ACC off; factory DVR owns parking mode";
-            parkingHandler.removeCallbacks(configuredRecordingReconciler);
-            parkingHandler.removeCallbacks(parkingStateSupervisor);
-            releaseWakeLock();
+            serviceHandler.removeCallbacks(configuredRecordingReconciler);
+            serviceHandler.removeCallbacks(accStateSupervisor);
             stopSelf();
         }
     }
 
-    public void applyParkingSettings() {
-        configureSystemSentry();
-        parkingActive = false;
-        vehicleBatteryVoltage = parkingBridge == null ? -1f : parkingBridge.readBatteryVoltage();
-        parkingStatus = ignitionOn
-                ? (parkingEnabled() ? "Factory parking armed" : "Factory parking is disabled")
-                : "ACC off; factory DVR owns parking mode";
-        if (!ignitionOn && requiresConfirmedAcc()) stopSelf();
-    }
-
-    private void configureSystemSentry() {
-        // Camera Link never writes the vendor sentry flag or MCU heartbeat.
-        // Parking state belongs to the platform-signed factory DVR service.
-    }
-
-    private void superviseParkingState() {
-        if (parkingBridge == null) return;
-        int acc = parkingBridge.readAccStatus();
+    private void superviseAccState() {
+        if (accState == null) return;
+        int acc = accState.read();
         boolean detectedIgnition = !requiresConfirmedAcc() || acc == 1;
         if (detectedIgnition != ignitionOn) {
             Log.i(TAG, "ATOTO ACC state changed by supervisor: " + detectedIgnition);
@@ -491,9 +452,7 @@ public class CameraStreamService extends Service implements SensorEventListener,
         }
         if (ignitionOn) {
             if (frontPipeline != null) frontPipeline.refreshFactoryState();
-            vehicleBatteryVoltage = parkingBridge.readBatteryVoltage();
-            parkingStatus = parkingEnabled() ? "Factory parking armed" :
-                    "Factory parking is disabled";
+            if (!running) startServer();
         }
     }
 
@@ -547,40 +506,7 @@ public class CameraStreamService extends Service implements SensorEventListener,
         }, "HN7ConfiguredRecordingRetry").start();
     }
 
-    private boolean parkingEnabled() {
-        return AtotoParkingBridge.isSystemSentryEnabled(this);
-    }
-
-    private int parkingDurationMinutes() {
-        int value = Settings.System.getInt(getContentResolver(), "sentry_shutdown_time", 1);
-        return value == 0 ? 30 : value == 2 ? 1440 : 960;
-    }
-
-    private float parkingCutoffVoltage() {
-        int value = Settings.System.getInt(getContentResolver(), "voltage_detection", 1);
-        return value == 0 ? 11.6f : value == 2 ? 12.0f : 11.8f;
-    }
-
-    private void ensureWakeLock() {
-        if (!ignitionOn || !hasConfirmedAccNow()) return;
-        if (wakeLock != null && !wakeLock.isHeld()) {
-            try { wakeLock.acquire(); } catch (Throwable ignored) { }
-        }
-    }
-
-    private void releaseWakeLock() {
-        if (wakeLock != null && wakeLock.isHeld()) {
-            try { wakeLock.release(); } catch (Throwable ignored) { }
-        }
-    }
-
     public boolean isIgnitionOn() { return ignitionOn; }
-    public boolean isParkingActive() { return parkingActive; }
-    public float getVehicleBatteryVoltage() { return vehicleBatteryVoltage; }
-    public String getParkingStatus() { return parkingStatus; }
-    public boolean isParkingVendorAvailable() {
-        return parkingBridge != null && parkingBridge.isAvailable();
-    }
     public boolean isFactoryDvrIntegrationReady() {
         return frontPipeline != null && frontPipeline.factoryBridgeActive;
     }
@@ -593,8 +519,8 @@ public class CameraStreamService extends Service implements SensorEventListener,
 
     private boolean hasConfirmedAccNow() {
         if (!requiresConfirmedAcc()) return true;
-        AtotoParkingBridge bridge = parkingBridge == null ? new AtotoParkingBridge() : parkingBridge;
-        return bridge.readAccStatus() == 1;
+        AtotoAccState current = accState == null ? new AtotoAccState() : accState;
+        return current.read() == 1;
     }
 
     @Override public void onSensorChanged(SensorEvent event) {
@@ -860,13 +786,16 @@ public class CameraStreamService extends Service implements SensorEventListener,
         }
     }
 
-    private void startServer() {
+    private synchronized void startServer() {
         if (running || !ignitionOn || !hasConfirmedAccNow()) return;
         running = true;
         serverThread = new Thread(new Runnable() {
             @Override public void run() {
                 try {
-                    serverSocket = new ServerSocket(PORT);
+                    ServerSocket listener = new ServerSocket();
+                    listener.setReuseAddress(true);
+                    listener.bind(new InetSocketAddress(PORT));
+                    serverSocket = listener;
                     while (running) {
                         final Socket socket = serverSocket.accept();
                         socket.setSoTimeout(15000);
@@ -876,6 +805,11 @@ public class CameraStreamService extends Service implements SensorEventListener,
                     }
                 } catch (IOException e) {
                     if (running) Log.e(TAG, "HTTP server stopped", e);
+                } finally {
+                    running = false;
+                    try { if (serverSocket != null) serverSocket.close(); }
+                    catch (IOException ignored) { }
+                    serverSocket = null;
                 }
             }
         }, "HN7CameraHttp");
@@ -973,9 +907,7 @@ public class CameraStreamService extends Service implements SensorEventListener,
                                 "\"frontOpen\":%s,\"frontWidth\":%d,\"frontHeight\":%d,\"frontRecording\":%s," +
                                 "\"frontRecordingRequested\":%s,\"frontInput\":%d,\"frontRecordingPath\":\"%s\"," +
                                 "\"frontRecordingError\":\"%s\",\"frontError\":\"%s\"," +
-                                "\"frontPreviewFrames\":%d,\"frontQueuedFrames\":%d,\"frontEncodedFrames\":%d,\"frontSamples\":%d,\"parkingEnabled\":%s," +
-                                "\"parkingActive\":%s,\"ignitionOn\":%s,\"vehicleBatteryVoltage\":%.1f,\"parkingCutoffVoltage\":%.1f," +
-                                "\"parkingDurationMinutes\":%d,\"parkingSystemReady\":%s,\"parkingVendorAvailable\":%s,\"parkingStatus\":\"%s\"}\n",
+                                "\"frontPreviewFrames\":%d,\"frontQueuedFrames\":%d,\"frontEncodedFrames\":%d,\"frontSamples\":%d,\"ignitionOn\":%s}\n",
                         jsonEscape(getSharedPreferences("settings", MODE_PRIVATE).getString("vehicle_name", "ATOTO radio")),
                         Camera.getNumberOfCameras(), activeCamera, frameWidth, frameHeight,
                         Boolean.toString(recording), Boolean.toString(recordingRequested),
@@ -987,10 +919,7 @@ public class CameraStreamService extends Service implements SensorEventListener,
                         jsonEscape(frontPipeline.currentRecordingPath), jsonEscape(frontPipeline.recordingError),
                         jsonEscape(frontPipeline.cameraError), frontPipeline.previewFrameCount,
                         frontPipeline.queuedFrameCount, frontPipeline.encodedFrameCount, frontPipeline.sampleCount,
-                        Boolean.toString(parkingEnabled()), Boolean.toString(parkingActive), Boolean.toString(ignitionOn),
-                        vehicleBatteryVoltage, parkingCutoffVoltage(), parkingDurationMinutes(),
-                        Boolean.toString(factoryStatus.ok),
-                        Boolean.toString(isParkingVendorAvailable()), jsonEscape(parkingStatus));
+                        Boolean.toString(ignitionOn));
                 writeJson(out, json);
             } else {
                 writeHome(out);

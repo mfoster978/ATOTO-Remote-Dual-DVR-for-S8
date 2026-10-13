@@ -35,7 +35,7 @@ public class MjpegView extends View {
         final String auth = "Basic " + Base64.encodeToString(
                 (username + ":" + password).getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP);
         worker = new Thread(new Runnable() {
-            @Override public void run() { readStream(streamUrl, auth); }
+            @Override public void run() { readStreamLoop(streamUrl, auth); }
         }, "CameraLinkMjpeg");
         worker.start();
     }
@@ -48,15 +48,25 @@ public class MjpegView extends View {
         worker = null;
     }
 
-    private void readStream(String streamUrl, String auth) {
+    private void readStreamLoop(String streamUrl, String auth) {
+        while (running) {
+            readStreamOnce(streamUrl, auth);
+            if (!running) return;
+            try { Thread.sleep(1_500L); }
+            catch (InterruptedException ignored) { return; }
+        }
+    }
+
+    private void readStreamOnce(String streamUrl, String auth) {
+        BufferedInputStream input = null;
         try {
             connection = (HttpURLConnection) new URL(streamUrl).openConnection();
-            connection.setConnectTimeout(10_000);
+            connection.setConnectTimeout(5_000);
             connection.setReadTimeout(15_000);
             connection.setRequestProperty("Authorization", auth);
             connection.setUseCaches(false);
             if (connection.getResponseCode() != 200) return;
-            BufferedInputStream input = new BufferedInputStream(connection.getInputStream(), 64 * 1024);
+            input = new BufferedInputStream(connection.getInputStream(), 64 * 1024);
             ByteArrayOutputStream jpeg = null;
             int previous = -1;
             int value;
@@ -87,9 +97,11 @@ public class MjpegView extends View {
                 }
                 previous = value;
             }
-            input.close();
         } catch (Throwable ignored) {
         } finally {
+            if (input != null) {
+                try { input.close(); } catch (Throwable ignored) { }
+            }
             if (connection != null) connection.disconnect();
             connection = null;
         }

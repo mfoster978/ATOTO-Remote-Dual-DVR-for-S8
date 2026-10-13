@@ -10,6 +10,9 @@ import android.os.SystemClock;
 import android.util.Log;
 
 public class BootReceiver extends BroadcastReceiver {
+    private static final String ACTION_ACC_ON_RECOVERY =
+            "com.codex.hn7camerastream.ACC_ON_RECOVERY";
+
     @Override
     public void onReceive(Context context, Intent intent) {
         String action = intent == null ? "" : intent.getAction();
@@ -23,17 +26,34 @@ public class BootReceiver extends BroadcastReceiver {
                 .getString("device_mode", "radio");
         if ("phone".equals(mode)) return;
 
-        AtotoParkingBridge vehicle = new AtotoParkingBridge();
+        AtotoAccState accState = new AtotoAccState();
+        if (ACTION_ACC_ON_RECOVERY.equals(action)) {
+            int recoveredAcc = accState.read();
+            if (recoveredAcc != 1) {
+                Log.i("HN7CameraStream", "ACC-on recovery skipped; state=" + recoveredAcc);
+                return;
+            }
+            requestTailscale(context);
+            Intent service = new Intent(context, CameraStreamService.class)
+                    .setAction(CameraStreamService.ACTION_BOOTSTRAP_RETRY);
+            try { context.startForegroundService(service); }
+            catch (RuntimeException error) {
+                Log.w("HN7CameraStream", "ACC-on recovery could not start server", error);
+            }
+            scheduleCameraBootstrap(context);
+            return;
+        }
         if ("android.mcu.device.action.ACC".equals(action)) {
             boolean accOn = intent.getBooleanExtra("AccStatus", false);
+            AtotoAccState.noteBroadcast(accOn);
             if (!accOn) {
                 // ATOTO's original VideoService exclusively owns the ACC-off
-                // transition and parking recorder. Never start Camera Link,
-                // Tailscale, an alarm, or a wake lock during that transition.
+                // transition. Never start Camera Link, Tailscale, or an alarm
+                // during that transition.
                 cancelCameraBootstrap(context);
                 try { context.stopService(new Intent(context, CameraStreamService.class)); }
                 catch (RuntimeException ignored) { }
-                Log.i("HN7CameraStream", "ACC off; custom camera service stopped for factory parking safety");
+                Log.i("HN7CameraStream", "ACC off; custom camera service stopped");
                 return;
             }
             requestTailscale(context);
@@ -41,14 +61,15 @@ public class BootReceiver extends BroadcastReceiver {
             try { context.startForegroundService(service); }
             catch (RuntimeException ignored) { }
             scheduleCameraBootstrap(context);
+            scheduleServerRecovery(context);
             return;
         }
-        int acc = vehicle.readAccStatus();
+        int acc = accState.read();
         if (acc != 1) {
-            cancelCameraBootstrap(context);
             try { context.stopService(new Intent(context, CameraStreamService.class)); }
             catch (RuntimeException ignored) { }
-            Log.i("HN7CameraStream", "Boot start deferred until confirmed ACC-on; state=" + acc);
+            scheduleServerRecovery(context);
+            Log.i("HN7CameraStream", "Start deferred for ACC-on recovery checks; state=" + acc);
             return;
         }
         requestTailscale(context);
@@ -56,6 +77,7 @@ public class BootReceiver extends BroadcastReceiver {
         try { context.startForegroundService(service); }
         catch (RuntimeException ignored) { }
         scheduleCameraBootstrap(context);
+        scheduleServerRecovery(context);
     }
 
     private static void requestTailscale(Context context) {
@@ -96,6 +118,33 @@ public class BootReceiver extends BroadcastReceiver {
         }
     }
 
+    private static void scheduleServerRecovery(Context context) {
+        AlarmManager alarms = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
+        if (alarms == null) return;
+        long[] delays = new long[]{12_000L, 35_000L};
+        for (int index = 0; index < delays.length; index++) {
+            Intent retry = new Intent(context, BootReceiver.class)
+                    .setAction(ACTION_ACC_ON_RECOVERY);
+            PendingIntent pending = PendingIntent.getBroadcast(context, 8767 + index, retry,
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+            long triggerAt = SystemClock.elapsedRealtime() + delays[index];
+            try {
+                if (Build.VERSION.SDK_INT >= 23) {
+                    alarms.setExactAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME, triggerAt, pending);
+                } else {
+                    alarms.setExact(AlarmManager.ELAPSED_REALTIME, triggerAt, pending);
+                }
+            } catch (SecurityException denied) {
+                if (Build.VERSION.SDK_INT >= 23) {
+                    alarms.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME, triggerAt, pending);
+                } else {
+                    alarms.set(AlarmManager.ELAPSED_REALTIME, triggerAt, pending);
+                }
+            }
+        }
+        Log.i("HN7CameraStream", "Scheduled ACC-on server recovery checks");
+    }
+
     private static void cancelCameraBootstrap(Context context) {
         AlarmManager alarms = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
         if (alarms == null) return;
@@ -107,5 +156,14 @@ public class BootReceiver extends BroadcastReceiver {
         try { alarms.cancel(pending); }
         catch (RuntimeException ignored) { }
         pending.cancel();
+        for (int index = 0; index < 2; index++) {
+            Intent retry = new Intent(context, BootReceiver.class)
+                    .setAction(ACTION_ACC_ON_RECOVERY);
+            PendingIntent recovery = PendingIntent.getBroadcast(context, 8767 + index, retry,
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+            try { alarms.cancel(recovery); }
+            catch (RuntimeException ignored) { }
+            recovery.cancel();
+        }
     }
 }

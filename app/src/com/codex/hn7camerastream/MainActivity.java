@@ -84,8 +84,8 @@ import java.util.Map;
 import java.util.Date;
 
 public class MainActivity extends Activity {
-    private static final String APP_VERSION_NAME = "2.0.1";
-    private static final int APP_VERSION_CODE = 20000;
+    private static final String APP_VERSION_NAME = "2.0.2";
+    private static final int APP_VERSION_CODE = 20002;
     private static final String GITHUB_REPOSITORY = "mfoster978/ATOTO-Remote-Dual-DVR-for-S8";
     private static final String GITHUB_REPOSITORY_URL = "https://github.com/" + GITHUB_REPOSITORY;
     private static final String GITHUB_LATEST_RELEASE_API = "https://api.github.com/repos/" + GITHUB_REPOSITORY + "/releases/latest";
@@ -226,7 +226,6 @@ public class MainActivity extends Activity {
             startFactoryDvrAfterIntegrationInstall();
         }
         String mode = preferences.getString(MODE_KEY, "");
-        if (MODE_RADIO.equals(mode)) syncParkingSystemSetting();
         boolean sessionUnlocked = StockDvrAccessGuard.isSessionUnlocked(this);
         if (MODE_RADIO.equals(mode) && isOwnerLockEnabled() && !ownerUnlocked && !sessionUnlocked
                 && isProtectedRadioPage(currentPage) && !"unlock".equals(currentPage)) {
@@ -1105,7 +1104,6 @@ public class MainActivity extends Activity {
                 "The factory DVR keeps ownership of the shared Front/DVR Camera 2 input. Camera Link adds the independent reverse recording and private remote streams without stopping the factory DVR.");
         addKeyValue(integration, "Front / DVR Camera 2", "Factory DVR shared input");
         addKeyValue(integration, "Reverse camera", "Independent Camera Link input");
-        addKeyValue(integration, "Factory parking settings", "Unchanged and controlled only by ATOTO DVR");
         if (!isFactoryDvrHost()) {
             addAction(integration, factoryReady ? "Reinstall/update factory DVR integration" :
                     "Install factory DVR integration", factoryReady ? SURFACE_2 : PRIMARY,
@@ -1121,11 +1119,6 @@ public class MainActivity extends Activity {
         preferences.edit().putInt("loop_minutes", minutes).apply();
         toast("New clips will use " + minutes + " minute segments.");
         showRadioRecording();
-    }
-
-    private void syncParkingSystemSetting() {
-        // The platform-signed factory DVR owns sentry configuration and the
-        // MCU heartbeat. Camera Link only observes that vendor-managed state.
     }
 
     private void addUsbStorageSettings(LinearLayout page) {
@@ -1386,8 +1379,7 @@ public class MainActivity extends Activity {
         addStep(setup, "2", "Open DVR and use the LINK button for remote access, reverse recording, storage, security, and setup controls.");
         addStep(setup, "3", "Keep the DVR USB drive inserted. Enable automatic recording only for physical cameras installed in this vehicle and verify each live picture.");
         addStep(setup, "4", "Install/open Tailscale, sign in, and set it as Android's Always-on VPN on the radio.");
-        addStep(setup, "5", "Use ATOTO's original DVR Settings screen for parking monitoring, duration, and battery cutoff. The enhanced features do not write those settings.");
-        addStep(setup, "6", "Set an owner PIN, install the separate Camera Link Viewer APK on the phone, and scan the radio setup QR.");
+        addStep(setup, "5", "Set an owner PIN, install the separate Camera Link Viewer APK on the phone, and scan the radio setup QR.");
         page.addView(setup, cardParams());
 
         LinearLayout integration = card();

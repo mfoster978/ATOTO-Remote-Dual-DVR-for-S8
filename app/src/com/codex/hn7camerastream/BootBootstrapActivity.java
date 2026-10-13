@@ -35,7 +35,7 @@ public final class BootBootstrapActivity extends Activity {
         super.onResume();
         if (started) return;
         started = true;
-        if (new AtotoParkingBridge().readAccStatus() != 1) {
+        if (new AtotoAccState().read() != 1) {
             Log.i(TAG, "Bootstrap cancelled because ACC is not confirmed on");
             finishAndRemoveTask();
             overridePendingTransition(0, 0);

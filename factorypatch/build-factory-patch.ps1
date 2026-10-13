@@ -16,8 +16,8 @@ $ClassesJar = Join-Path $Out 'camera-link-enhancements.jar'
 $Unsigned = Join-Path $Out 'enhanced-stock-dvr-unsigned.apk'
 $WithDex = Join-Path $Out 'enhanced-stock-dvr-with-dex.apk'
 $Aligned = Join-Path $Out 'enhanced-stock-dvr-aligned.apk'
-$Signed = Join-Path $Out 'ATOTO-S8-Enhanced-Stock-DVR-v2.0.1.apk'
-$Published = Join-Path $ProjectRoot 'ATOTO-S8-Enhanced-Stock-DVR-v2.0.1.apk'
+$Signed = Join-Path $Out 'ATOTO-S8-Enhanced-Stock-DVR-v2.0.2.apk'
+$Published = Join-Path $ProjectRoot 'ATOTO-S8-Enhanced-Stock-DVR-v2.0.2.apk'
 $ZxingJar = Join-Path $ProjectRoot 'app\lib\zxing-core-3.5.3.jar'
 $ExpectedCertificate = 'c8a2e9bccf597c2fb6dc66bee293fc13f2fc47ec77bc6b2b0d52c11f51192ab8'
 
@@ -59,8 +59,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Apktool decode failed.' }
 
 $ApktoolYaml = Join-Path $DecodeRoot 'apktool.yml'
 $Yaml = Get-Content -Raw -LiteralPath $ApktoolYaml
-$Yaml = $Yaml -replace '(?m)^  versionCode:.*$', '  versionCode: 210001'
-$Yaml = $Yaml -replace '(?m)^  versionName:.*$', '  versionName: 2.0.1-camera-link'
+$Yaml = $Yaml -replace '(?m)^  versionCode:.*$', '  versionCode: 210002'
+$Yaml = $Yaml -replace '(?m)^  versionName:.*$', '  versionName: 2.0.2-camera-link'
 [IO.File]::WriteAllText($ApktoolYaml, $Yaml, $Utf8NoBom)
 
 $Manifest = Join-Path $DecodeRoot 'AndroidManifest.xml'
@@ -72,7 +72,6 @@ $Permissions = @'
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"/>
-    <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
@@ -174,6 +173,8 @@ $FolderActivitySmaliPath = Join-Path $DecodeRoot 'smali\com\hcn\dvr\FolderPlayba
 $FolderActivitySmali = Get-Content -Raw -LiteralPath $FolderActivitySmaliPath
 $FolderNeedle = '    invoke-virtual {p0, p1}, Lcom/hcn/dvr/FolderPlaybackActivity;->setContentView(I)V'
 $FolderPatch = $FolderNeedle + [Environment]::NewLine + [Environment]::NewLine +
+    '    # Add the reverse-camera filter beside the native ALL/F/C controls.' + [Environment]::NewLine +
+    '    invoke-static {p0}, Lcom/codex/hn7camerastream/StockDvrLibraryBridge;->attachReverseFilter(Landroid/app/Activity;)V' + [Environment]::NewLine + [Environment]::NewLine +
     '    # UI-only owner gate. Native fragments continue initializing behind it.' + [Environment]::NewLine +
     '    invoke-static {p0}, Lcom/codex/hn7camerastream/StockDvrAccessGuard;->protect(Landroid/app/Activity;)V'
 if (-not $FolderActivitySmali.Contains($FolderNeedle)) { throw 'FolderPlaybackActivity owner-lock patch point was not found.' }
@@ -211,8 +212,43 @@ $FolderSmali = $FolderSmali.Remove($ListMethodMatch.Index, $ListMethodMatch.Leng
 $FolderSmali = $FolderSmali.Insert($ListMethodMatch.Index, $ListMethod)
 [IO.File]::WriteAllText($FolderSmaliPath, $FolderSmali, $Utf8NoBom)
 
-# Give reverse clips an R badge in the existing factory grid. The stock F/C
-# filters remain unchanged; reverse clips are shown in the normal All view.
+# Extend the factory fragment's existing camera filter to accept R.
+$FolderSmali = Get-Content -Raw -LiteralPath $FolderSmaliPath
+$FilterMethodMatch = [regex]::Match($FolderSmali,
+    '(?s)\.method public fileFilter\(Ljava/lang/String;\)V.*?\.end method')
+if (-not $FilterMethodMatch.Success) { throw 'FolderFragment fileFilter method was not found.' }
+$FilterMethod = @'
+.method public fileFilter(Ljava/lang/String;)V
+    .locals 2
+
+    const-string v0, "F"
+    invoke-virtual {v0, p1}, Ljava/lang/String;->equals(Ljava/lang/Object;)Z
+    move-result v1
+    if-nez v1, :set_filter
+
+    const-string v0, "C"
+    invoke-virtual {v0, p1}, Ljava/lang/String;->equals(Ljava/lang/Object;)Z
+    move-result v1
+    if-nez v1, :set_filter
+
+    const-string v0, "R"
+    invoke-virtual {v0, p1}, Ljava/lang/String;->equals(Ljava/lang/Object;)Z
+    move-result v1
+    if-nez v1, :set_filter
+
+    const/4 v0, 0x0
+
+    :set_filter
+    iput-object v0, p0, Lcom/hcn/dvr/FolderFragment;->cameraTypeFilter:Ljava/lang/String;
+    invoke-direct {p0}, Lcom/hcn/dvr/FolderFragment;->refreshFileList()V
+    return-void
+.end method
+'@
+$FolderSmali = $FolderSmali.Remove($FilterMethodMatch.Index, $FilterMethodMatch.Length)
+$FolderSmali = $FolderSmali.Insert($FilterMethodMatch.Index, $FilterMethod.TrimEnd())
+[IO.File]::WriteAllText($FolderSmaliPath, $FolderSmali, $Utf8NoBom)
+
+# Give reverse clips an R badge in the existing factory grid.
 $VideoHelperSmaliPath = Join-Path $DecodeRoot 'smali\com\hcn\dvr\utils\VideoHelper.smali'
 $VideoHelperSmali = Get-Content -Raw -LiteralPath $VideoHelperSmaliPath
 $TypeMethodMatch = [regex]::Match($VideoHelperSmali,
@@ -257,6 +293,19 @@ $VideoHelperSmali = $VideoHelperSmali.Remove($TypeMethodMatch.Index, $TypeMethod
 $VideoHelperSmali = $VideoHelperSmali.Insert($TypeMethodMatch.Index, $TypeMethod.TrimEnd())
 [IO.File]::WriteAllText($VideoHelperSmaliPath, $VideoHelperSmali, $Utf8NoBom)
 
+# The factory adapter normally uses MediaItem.cameraType. Also derive R directly
+# from the file at bind time so old or cached reverse items cannot show a blank badge.
+$FileAdapterSmaliPath = Join-Path $DecodeRoot 'smali\com\hcn\dvr\adapter\FileAdapter.smali'
+$FileAdapterSmali = Get-Content -Raw -LiteralPath $FileAdapterSmaliPath
+$BadgeMatch = [regex]::Match($FileAdapterSmali,
+    '(?s)    iget-object p1, v1, Lcom/hcn/dvr/adapter/FileAdapter\$VideoViewHolder;->typeText:Landroid/widget/TextView;.*?    invoke-virtual \{p1, v2\}, Landroid/widget/TextView;->setText\(Ljava/lang/CharSequence;\)V')
+if (-not $BadgeMatch.Success) { throw 'FileAdapter reverse badge patch point was not found.' }
+$BadgePatch = $BadgeMatch.Value + [Environment]::NewLine + [Environment]::NewLine +
+    '    invoke-static {p1, v3}, Lcom/codex/hn7camerastream/StockDvrLibraryBridge;->ensureReverseBadge(Landroid/widget/TextView;Ljava/io/File;)V' + [Environment]::NewLine
+$FileAdapterSmali = $FileAdapterSmali.Remove($BadgeMatch.Index, $BadgeMatch.Length)
+$FileAdapterSmali = $FileAdapterSmali.Insert($BadgeMatch.Index, $BadgePatch.TrimEnd())
+[IO.File]::WriteAllText($FileAdapterSmaliPath, $FileAdapterSmali, $Utf8NoBom)
+
 $Sources = @(
     Get-ChildItem -LiteralPath (Join-Path $ProjectRoot 'app\src') -Recurse -Filter *.java | ForEach-Object FullName
     Get-ChildItem -LiteralPath (Join-Path $PatchRoot 'src') -Recurse -Filter *.java | ForEach-Object FullName
@@ -286,7 +335,7 @@ if ($LASTEXITCODE -ne 0 -or $SignedCertificate -notmatch "SHA-256 digest: $Expec
     throw 'Enhanced stock DVR signature verification failed.'
 }
 $Badging = (& (Join-Path $BuildTools 'aapt2.exe') dump badging $Signed) -join [Environment]::NewLine
-if ($LASTEXITCODE -ne 0 -or $Badging -notmatch "package: name='com.hcn.dvr' versionCode='210001' versionName='2.0.1-camera-link'") {
+if ($LASTEXITCODE -ne 0 -or $Badging -notmatch "package: name='com.hcn.dvr' versionCode='210002' versionName='2.0.2-camera-link'") {
     throw 'Enhanced APK did not preserve the package or apply the expected high version.'
 }
 $ArchiveEntries = (& (Join-Path $JavaRoot 'bin\jar.exe') tf $Signed) -join [Environment]::NewLine
