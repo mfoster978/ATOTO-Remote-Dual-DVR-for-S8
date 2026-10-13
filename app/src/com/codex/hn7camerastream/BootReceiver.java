@@ -26,20 +26,29 @@ public class BootReceiver extends BroadcastReceiver {
         AtotoParkingBridge vehicle = new AtotoParkingBridge();
         if ("android.mcu.device.action.ACC".equals(action)) {
             boolean accOn = intent.getBooleanExtra("AccStatus", false);
-            boolean parkingArmed = AtotoParkingBridge.isSystemSentryEnabled(context);
-            if (!accOn && !parkingArmed) {
-                Log.i("HN7CameraStream", "ACC off; factory parking is not armed");
+            if (!accOn) {
+                // ATOTO's original VideoService exclusively owns the ACC-off
+                // transition and parking recorder. Never start Camera Link,
+                // Tailscale, an alarm, or a wake lock during that transition.
+                cancelCameraBootstrap(context);
+                try { context.stopService(new Intent(context, CameraStreamService.class)); }
+                catch (RuntimeException ignored) { }
+                Log.i("HN7CameraStream", "ACC off; custom camera service stopped for factory parking safety");
                 return;
             }
             requestTailscale(context);
             Intent service = new Intent(context, CameraStreamService.class);
             try { context.startForegroundService(service); }
             catch (RuntimeException ignored) { }
+            scheduleCameraBootstrap(context);
             return;
         }
         int acc = vehicle.readAccStatus();
-        if (acc != 1 && !AtotoParkingBridge.isSystemSentryEnabled(context)) {
-            Log.i("HN7CameraStream", "Boot start deferred until ACC-on or factory parking; state=" + acc);
+        if (acc != 1) {
+            cancelCameraBootstrap(context);
+            try { context.stopService(new Intent(context, CameraStreamService.class)); }
+            catch (RuntimeException ignored) { }
+            Log.i("HN7CameraStream", "Boot start deferred until confirmed ACC-on; state=" + acc);
             return;
         }
         requestTailscale(context);
@@ -70,20 +79,33 @@ public class BootReceiver extends BroadcastReceiver {
         long triggerAt = SystemClock.elapsedRealtime() + 1_500L;
         try {
             if (Build.VERSION.SDK_INT >= 23) {
-                alarms.setExactAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                alarms.setExactAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME,
                         triggerAt, pending);
             } else {
-                alarms.setExact(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAt, pending);
+                alarms.setExact(AlarmManager.ELAPSED_REALTIME, triggerAt, pending);
             }
             Log.i("HN7CameraStream", "Scheduled transparent camera bootstrap after boot");
         } catch (SecurityException denied) {
             Log.w("HN7CameraStream", "Exact bootstrap alarm denied; using inexact alarm", denied);
             if (Build.VERSION.SDK_INT >= 23) {
-                alarms.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                alarms.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME,
                         triggerAt, pending);
             } else {
-                alarms.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAt, pending);
+                alarms.set(AlarmManager.ELAPSED_REALTIME, triggerAt, pending);
             }
         }
+    }
+
+    private static void cancelCameraBootstrap(Context context) {
+        AlarmManager alarms = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
+        if (alarms == null) return;
+        Intent bootstrap = new Intent(context, BootBootstrapActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION |
+                        Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS);
+        PendingIntent pending = PendingIntent.getActivity(context, 8766, bootstrap,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        try { alarms.cancel(pending); }
+        catch (RuntimeException ignored) { }
+        pending.cancel();
     }
 }

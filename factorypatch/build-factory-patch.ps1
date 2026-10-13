@@ -16,8 +16,8 @@ $ClassesJar = Join-Path $Out 'camera-link-enhancements.jar'
 $Unsigned = Join-Path $Out 'enhanced-stock-dvr-unsigned.apk'
 $WithDex = Join-Path $Out 'enhanced-stock-dvr-with-dex.apk'
 $Aligned = Join-Path $Out 'enhanced-stock-dvr-aligned.apk'
-$Signed = Join-Path $Out 'ATOTO-S8-Enhanced-Stock-DVR-v2.0.0.apk'
-$Published = Join-Path $ProjectRoot 'ATOTO-S8-Enhanced-Stock-DVR-v2.0.0.apk'
+$Signed = Join-Path $Out 'ATOTO-S8-Enhanced-Stock-DVR-v2.0.1.apk'
+$Published = Join-Path $ProjectRoot 'ATOTO-S8-Enhanced-Stock-DVR-v2.0.1.apk'
 $ZxingJar = Join-Path $ProjectRoot 'app\lib\zxing-core-3.5.3.jar'
 $ExpectedCertificate = 'c8a2e9bccf597c2fb6dc66bee293fc13f2fc47ec77bc6b2b0d52c11f51192ab8'
 
@@ -59,8 +59,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Apktool decode failed.' }
 
 $ApktoolYaml = Join-Path $DecodeRoot 'apktool.yml'
 $Yaml = Get-Content -Raw -LiteralPath $ApktoolYaml
-$Yaml = $Yaml -replace '(?m)^  versionCode:.*$', '  versionCode: 210000'
-$Yaml = $Yaml -replace '(?m)^  versionName:.*$', '  versionName: 2.0.0-camera-link'
+$Yaml = $Yaml -replace '(?m)^  versionCode:.*$', '  versionCode: 210001'
+$Yaml = $Yaml -replace '(?m)^  versionName:.*$', '  versionName: 2.0.1-camera-link'
 [IO.File]::WriteAllText($ApktoolYaml, $Yaml, $Utf8NoBom)
 
 $Manifest = Join-Path $DecodeRoot 'AndroidManifest.xml'
@@ -286,7 +286,7 @@ if ($LASTEXITCODE -ne 0 -or $SignedCertificate -notmatch "SHA-256 digest: $Expec
     throw 'Enhanced stock DVR signature verification failed.'
 }
 $Badging = (& (Join-Path $BuildTools 'aapt2.exe') dump badging $Signed) -join [Environment]::NewLine
-if ($LASTEXITCODE -ne 0 -or $Badging -notmatch "package: name='com.hcn.dvr' versionCode='210000' versionName='2.0.0-camera-link'") {
+if ($LASTEXITCODE -ne 0 -or $Badging -notmatch "package: name='com.hcn.dvr' versionCode='210001' versionName='2.0.1-camera-link'") {
     throw 'Enhanced APK did not preserve the package or apply the expected high version.'
 }
 $ArchiveEntries = (& (Join-Path $JavaRoot 'bin\jar.exe') tf $Signed) -join [Environment]::NewLine

@@ -18,9 +18,12 @@ public final class EnhancedDvrBootstrap {
 
         AtotoParkingBridge vehicle = new AtotoParkingBridge();
         int acc = vehicle.readAccStatus();
-        boolean factoryParkingArmed = AtotoParkingBridge.isSystemSentryEnabled(app);
-        if (acc != 1 && !factoryParkingArmed) {
-            Log.i(TAG, "Enhanced services remain stopped because ACC is off and factory parking is not armed: " + acc);
+        if (acc != 1) {
+            // The factory DVR alone owns parking mode. Camera Link must never
+            // extend the package lifetime or request VPN during ACC-off.
+            try { app.stopService(new Intent(app, CameraStreamService.class)); }
+            catch (RuntimeException ignored) { }
+            Log.i(TAG, "Enhanced services remain stopped until confirmed ACC-on: " + acc);
             return;
         }
         try {

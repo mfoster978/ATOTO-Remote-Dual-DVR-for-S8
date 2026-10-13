@@ -218,6 +218,9 @@ public final class StockDvrUiBridge {
         private void tryFactoryAutoRecord(final int generation, final int attempt) {
             final Activity activity = activityRef.get();
             if (activity == null || activity.isFinishing() || generation != autoRecordGeneration) return;
+            // Never issue a camera or encoder command while ATOTO is entering
+            // its MCU-managed parking state.
+            if (new AtotoParkingBridge().readAccStatus() != 1) return;
             boolean retry = true;
             try {
                 Class<?> helperClass = Class.forName("com.hcn.dvr.utils.DataHelper");

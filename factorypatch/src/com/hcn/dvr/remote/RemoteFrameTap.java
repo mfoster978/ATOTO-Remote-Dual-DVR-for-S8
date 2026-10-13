@@ -50,6 +50,10 @@ public final class RemoteFrameTap {
     private static volatile int latestCameraId = -1;
     private static volatile boolean serverStarted;
     private static volatile Context applicationContext;
+    private static volatile long lastAccCheckMs;
+    private static volatile boolean lastAccOn;
+    private static Object carStatus;
+    private static Method getAccStatus;
 
     private RemoteFrameTap() {
     }
@@ -58,6 +62,10 @@ public final class RemoteFrameTap {
                                  final int cameraId, Context context) {
         if (context != null && applicationContext == null) {
             applicationContext = context.getApplicationContext();
+        }
+        if (!isAccOn(false)) {
+            clearPublishedFrame();
+            return;
         }
         ensureServerStarted();
         if (frame == null || width <= 0 || height <= 0) {
@@ -191,6 +199,16 @@ public final class RemoteFrameTap {
                 }
             }
 
+            boolean mutatesFactory = path.startsWith("/select?camera=") ||
+                    "/record/start".equals(path) || "/record/stop".equals(path) ||
+                    "/record/lock".equals(path) || path.startsWith("/settings/audio?enabled=");
+            if (mutatesFactory && !isAccOn(true)) {
+                send(socket, 503, "application/json; charset=utf-8",
+                        "{\"ok\":false,\"reason\":\"ACC is off\"}\n"
+                                .getBytes(StandardCharsets.UTF_8));
+                return;
+            }
+
             if ("/stream.mjpeg".equals(path)) {
                 streamMjpeg(socket);
             } else if ("/frame.jpg".equals(path)) {
@@ -262,6 +280,34 @@ public final class RemoteFrameTap {
             } catch (Exception ignored) {
             }
         }
+    }
+
+    private static void clearPublishedFrame() {
+        if (latestJpeg == null && latestCameraId == -1) return;
+        synchronized (FRAME_MONITOR) {
+            latestJpeg = null;
+            latestCameraId = -1;
+            latestFrameTimeMs = 0L;
+            FRAME_MONITOR.notifyAll();
+        }
+    }
+
+    private static synchronized boolean isAccOn(boolean force) {
+        long now = SystemClock.uptimeMillis();
+        if (!force && now - lastAccCheckMs < 500L) return lastAccOn;
+        lastAccCheckMs = now;
+        try {
+            if (carStatus == null || getAccStatus == null) {
+                Class<?> statusClass = Class.forName("android.carstatus.CarStatus");
+                carStatus = statusClass.getConstructor().newInstance();
+                getAccStatus = statusClass.getMethod("getAccStatus");
+            }
+            Object value = getAccStatus.invoke(carStatus);
+            lastAccOn = value instanceof Number && ((Number) value).intValue() == 1;
+        } catch (Throwable error) {
+            lastAccOn = false;
+        }
+        return lastAccOn;
     }
 
     private static void streamMjpeg(Socket socket) throws Exception {

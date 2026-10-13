@@ -35,6 +35,12 @@ public final class BootBootstrapActivity extends Activity {
         super.onResume();
         if (started) return;
         started = true;
+        if (new AtotoParkingBridge().readAccStatus() != 1) {
+            Log.i(TAG, "Bootstrap cancelled because ACC is not confirmed on");
+            finishAndRemoveTask();
+            overridePendingTransition(0, 0);
+            return;
+        }
         Log.i(TAG, "Starting DVR service while camera permission is active");
         Intent service = new Intent(this, CameraStreamService.class);
         service.setAction(CameraStreamService.ACTION_BOOTSTRAP_RETRY);
