@@ -1,5 +1,8 @@
 # ATOTO Remote Dual DVR for S8
 
+> [!WARNING]
+> **Currently not working reliably — work in progress / in development.** Another factory reset was reported on the test radio on October 13, 2026. The cause is still unresolved, and the current builds must be considered experimental. Automatic server startup and reconnection are also not confirmed reliable, and live viewing with the vehicle off is unavailable. A successful short test or offline check does not establish stability during extended use or ignition/power changes.
+
 ATOTO Remote Dual DVR for S8 extends the factory DVR on compatible ATOTO S8 radios and adds a separate Android viewer for phones and tablets.
 
 The release contains two APKs:
@@ -10,14 +13,14 @@ The release contains two APKs:
 The intended radio setup is one factory DVR update plus one new app, Tailscale. Camera Link is no longer installed as a second DVR app on the radio.
 
 > [!IMPORTANT]
-> Remote live viewing while the vehicle is off is **not working yet**. On the tested radio, ATOTO's factory parking mode continues recording when it keeps the DVR powered, but Tailscale and the remote camera connection currently go offline after ACC-off. A safe solution is still being investigated. Version 2.0.3 stops all Camera Link services at ACC-off and leaves ATOTO's original DVR alone to handle parking, battery cutoff, and MCU power.
+> Remote live viewing while the vehicle is off is **not working yet**. Earlier short tests showed factory parking recording, but the later reset means overall power-cycle behavior remains unresolved. Tailscale and the remote camera connection go offline after ACC-off. Version 2.0.3 was designed to stop custom services at ACC-off and retain the original factory parking controls; this has not established a reliable fix for the resets.
 
 > [!CAUTION]
-> Do not install the withdrawn v1.5 or v1.6 experiments. Those versions attempted to manage S8 ACC-off behavior outside the factory DVR and caused factory resets during testing. Version 2.0.3 contains no custom parking, sentry, battery-voltage, or MCU keep-awake code. It also removes Camera Link's partial wake lock, stops its services at ACC-off, and blocks delayed camera commands during the power transition.
+> Do not install the withdrawn v1.5 or v1.6 experiments. Factory resets occurred during testing of those versions, which attempted to manage S8 ACC-off behavior outside the factory DVR. Later changes removed custom parking, sentry, battery-voltage, MCU keep-awake, and partial wake-lock code, but another reset has now been reported. The reset issue is **not resolved**; current release APKs are development builds and should not be treated as stable for everyday use.
 
 This is an independent community project. It is not made, supported, or endorsed by ATOTO or Tailscale.
 
-## Why this is more useful than the factory S8 DVR
+## Intended improvements over the factory S8 DVR
 
 The factory S8 DVR records the selected Front/DVR Camera 2 input but does not provide phone live viewing or record the separate Android reverse-camera input on the tested HN7 radio. This project adds both features while retaining the factory app and its native camera pipeline.
 
@@ -32,10 +35,12 @@ ATOTO's own [parking recording comparison](https://www.atotodirect.com/blogs/gui
 | Phone/tablet live view | Not available | Front, DVR2, Reverse, or DVR + Reverse split view |
 | Phone media playback | Not available | Streams completed USB recordings through the viewer |
 | Radio playback | Factory DVR clips | Factory clips and Camera Link reverse clips in the native player |
-| Vehicle-off recording | Factory parking mode | Factory parking mode remains in control and records on the tested radio |
+| Vehicle-off recording | Factory parking mode | Factory controls retained; long-term power-cycle behavior remains unreliable |
 | Vehicle-off live view | Not available | Not working yet |
 
-## Added features
+## Features under development
+
+These features describe the implementation and intended behavior. The project is currently not working reliably, and extended use and ignition/power changes still require investigation.
 
 - Remote live Front, DVR Camera 2, Reverse, and split-camera views through a private Tailscale connection.
 - Continuous reverse-camera H.264 MP4 recording alongside whichever shared DVR input ATOTO is recording.
@@ -77,7 +82,7 @@ Camera images, private addresses, credentials, GPS coordinates, and personal rec
 
 ## Tested radio
 
-The baseline v2.0.2 was installed on this unit. Version 2.0.3 adds an offline-verified startup fix; a real ignition cycle with that update has not yet been verified because wireless ADB was unavailable:
+The baseline v2.0.2 was installed on this unit, and v2.0.3 contains an attempted startup fix verified only with offline checks. Another factory reset was reported on October 13, 2026. Its exact trigger and the installed build at the time have not yet been verified. The tested hardware is listed below; this is not a claim of reliable operation:
 
 | Property | Tested value |
 | --- | --- |
@@ -93,6 +98,8 @@ The baseline v2.0.2 was installed on this unit. Version 2.0.3 adds an offline-ve
 Other S8 models and firmware builds may use different camera IDs, storage mounts, package certificates, or vehicle services. The enhanced radio APK is an update to a privileged factory package and has only been tested on the configuration above.
 
 ## Install on the radio
+
+These instructions are for development testing. The reset issue remains unresolved and current APKs are experimental.
 
 1. Download **`ATOTO-S8-Enhanced-Stock-DVR-v2.0.3.apk`** from the latest GitHub Release.
 2. Install it on the radio as an update to the existing ATOTO DVR. Do not uninstall the factory DVR first; the package data and original app identity must remain available.
@@ -149,11 +156,11 @@ The radio connection page shows the website username and password. The app conne
 
 ## Parking and power behavior
 
-ATOTO's factory DVR remains the sole owner of parking mode, parking duration, battery cutoff, and MCU power commands. On the tested radio, parking recording works when the factory parking setting keeps the DVR powered after ACC-off.
+The implementation retains ATOTO's factory ownership of parking mode, parking duration, battery cutoff, and MCU power commands. Earlier tests showed factory parking recording, but another radio factory reset has since been reported. The project is currently not working reliably, and long-term parking and ignition-cycle stability remain unverified.
 
 Remote live viewing after ACC-off is a separate problem. The tested radio currently takes Tailscale and the Camera Link remote endpoint offline even while the factory parking recorder continues. Version 2.0.3 explicitly stops Camera Link at ACC-off and does not attempt to defeat that power transition. Its added code does not read or change ATOTO's parking, sentry, battery-voltage, or MCU keep-awake controls.
 
-At the next ACC-on, Camera Link starts the server from the factory DVR's background service and observes its existing ignition broadcast, so opening the DVR screen is no longer required. It checks for a missing remote service every 10 seconds while ACC is confirmed on, retries Tailscale every 20 seconds while its VPN interface is missing, and performs non-waking recovery checks through 180 seconds for asynchronous startup. All custom recovery callbacks and alarms are canceled at ACC-off. Factory service and receiver instructions remain intact apart from the added observer calls; the factory sentry manager and parking settings are unchanged.
+The v2.0.3 startup change is intended to start the server at ACC-on from the factory DVR's background service and observe its existing ignition broadcast without opening the DVR screen. Reliable operation on the radio is still unconfirmed. It checks for a missing remote service every 10 seconds while ACC is confirmed on, retries Tailscale every 20 seconds while its VPN interface is missing, and performs non-waking recovery checks through 180 seconds for asynchronous startup. All custom recovery callbacks and alarms are canceled at ACC-off. Factory service and receiver instructions remain intact apart from the added observer calls; the factory sentry manager and parking settings are unchanged.
 
 The phone viewer retries after a dropped connection and isolates each stream session so an old request cannot close a newer connection. Its connection message follows received camera frames rather than merely detecting the phone's VPN interface. Real radio startup and network recovery for v2.0.3 still need confirmation on the tested hardware.
 
