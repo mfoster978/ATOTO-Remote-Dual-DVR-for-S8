@@ -12,38 +12,48 @@ import android.util.Log;
 public class BootReceiver extends BroadcastReceiver {
     @Override
     public void onReceive(Context context, Intent intent) {
+        String action = intent == null ? "" : intent.getAction();
+        if (Intent.ACTION_BOOT_COMPLETED.equals(action) ||
+                Intent.ACTION_LOCKED_BOOT_COMPLETED.equals(action)) {
+            StockDvrAccessGuard.clearSession(context);
+        }
         context.getSharedPreferences("settings", Context.MODE_PRIVATE)
                 .edit().putLong("last_boot_start", System.currentTimeMillis()).apply();
         String mode = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
                 .getString("device_mode", "radio");
         if ("phone".equals(mode)) return;
-        if ("android.mcu.device.action.ACC".equals(intent.getAction())) {
+
+        AtotoParkingBridge vehicle = new AtotoParkingBridge();
+        if ("android.mcu.device.action.ACC".equals(action)) {
+            boolean accOn = intent.getBooleanExtra("AccStatus", false);
+            boolean parkingArmed = AtotoParkingBridge.isSystemSentryEnabled(context);
+            if (!accOn && !parkingArmed) {
+                Log.i("HN7CameraStream", "ACC off; factory parking is not armed");
+                return;
+            }
+            requestTailscale(context);
             Intent service = new Intent(context, CameraStreamService.class);
             try { context.startForegroundService(service); }
             catch (RuntimeException ignored) { }
             return;
         }
-        if ("android.mcu.device.action.GSENSOR".equals(intent.getAction())) {
-            Log.w("HN7CameraStream", "ATOTO MCU G-sensor emergency event received");
-            CameraStreamService running = CameraStreamService.getRunningInstance();
-            if (running != null) {
-                running.handleMcuEmergencyEvent();
-                return;
-            }
-            Intent emergency = new Intent(context, CameraStreamService.class);
-            emergency.setAction(CameraStreamService.ACTION_EMERGENCY_LOCK);
-            try { context.startForegroundService(emergency); }
-            catch (RuntimeException ignored) { }
+        int acc = vehicle.readAccStatus();
+        if (acc != 1 && !AtotoParkingBridge.isSystemSentryEnabled(context)) {
+            Log.i("HN7CameraStream", "Boot start deferred until ACC-on or factory parking; state=" + acc);
             return;
         }
-        Intent tailscale = new Intent("com.tailscale.ipn.CONNECT_VPN");
-        tailscale.setPackage("com.tailscale.ipn");
-        try { context.sendBroadcast(tailscale); }
-        catch (RuntimeException ignored) { }
+        requestTailscale(context);
         Intent service = new Intent(context, CameraStreamService.class);
         try { context.startForegroundService(service); }
         catch (RuntimeException ignored) { }
         scheduleCameraBootstrap(context);
+    }
+
+    private static void requestTailscale(Context context) {
+        Intent tailscale = new Intent("com.tailscale.ipn.CONNECT_VPN");
+        tailscale.setPackage("com.tailscale.ipn");
+        try { context.sendBroadcast(tailscale); }
+        catch (RuntimeException ignored) { }
     }
 
     private static void scheduleCameraBootstrap(Context context) {
