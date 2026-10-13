@@ -6,10 +6,27 @@ An independent DVR replacement and remote camera viewer for compatible ATOTO S8 
 
 > This is a community project. It is not made, supported, or endorsed by ATOTO or Tailscale.
 
+## Why this app is useful
+
+**The main feature is live access to the vehicle's cameras from an Android phone or tablet, from anywhere the radio and phone have Internet access.** When Camera Link parking mode keeps the S8 powered after the ignition is turned off, the same private Tailscale connection remains available for live Front DVR, DVR Camera 2, backup/reverse-camera, or split-screen viewing. The radio must still have power and Internet access; no app can contact a head unit after the MCU has fully shut it down or after the configured parking-time or battery-voltage cutoff is reached.
+
+ATOTO's own [parking-recording feature comparison](https://www.atotodirect.com/blogs/guides/what-is-parking-recording-how-atoto-smart-parking-monitoring-helps-protect-your-vehicle-while-parked) lists **Mobile App Remote Viewing** as supported on X10 and not supported on S8 Gen4. ATOTO separately promotes [X10 D-DVR remote wake and live viewing through SSHub](https://www.atotodirect.com/en-us/blogs/x10/atoto-x10-d-dvr-dual-camera-recorder). Camera Link brings the core remote live-view capability to compatible S8 hardware without replacing the radio with an X10. It uses a private Tailscale connection and does not require exposing the camera server directly to the public Internet.
+
+On the tested HN7 S8, the factory DVR can use only one input on the shared Front/DVR2 decoder and does not record the separate Android backup/reverse-camera input. Camera Link records the selected **Front DVR or DVR Camera 2** input and the independent **backup/reverse camera at the same time**. The hardware mux prevents Front and DVR2 from being captured simultaneously, so the app explains that limit rather than claiming three simultaneous recordings.
+
+| Capability | Factory DVR on the tested HN7 S8 | Camera Link |
+| --- | --- | --- |
+| Remote live view from a phone or tablet | No camera live view over the Internet | Front, DVR2, backup/reverse, or DVR + Reverse split view through Tailscale |
+| Live view with ignition off | No remote viewer | Yes while parking mode keeps the radio, camera hardware, network, and VPN powered |
+| Backup/reverse-camera recording | Reverse display only on the tested factory setup | Independent MP4 recording to the DVR USB drive |
+| Simultaneous recording | One shared DVR input | One shared DVR input **plus** the backup/reverse camera |
+| Remote DVR-input selection | Local radio control only | Phone can temporarily select Front or DVR2; closing live view restores the radio's saved input and recording |
+| Viewer devices | Radio screen | Radio, Android phones, Android tablets, and a password-protected web browser |
+
 ## What it adds
 
 - Native, low-latency radio views for **Front**, **DVR Camera 2**, **Reverse**, and a selected DVR input + Reverse split screen.
-- Simultaneous front and reverse MP4 recording when both physical inputs are installed and available.
+- Simultaneous MP4 recording of the selected **Front or DVR Camera 2** input and the independent **backup/reverse camera** when both physical inputs are installed and available.
 - Phone live view for Front, DVR Camera 2, Reverse, or a DVR input + Reverse through the radio's private Tailscale address.
 - Temporary phone DVR-input switching that restores the radio's saved Front/DVR2 input when the remote viewer closes.
 - Optional vehicle audio in recordings and phone live view. The radio microphone setting is the master privacy control.

@@ -2,6 +2,17 @@
 
 Version 1.6 fixes cold-boot recording, remote live video, shared Front/DVR2 input switching, and ATOTO parking-power integration found during testing on the S8.
 
+## Why it matters
+
+The tested HN7 S8 factory DVR has no Internet live-camera viewer and does not record its separate backup/reverse-camera input alongside the selected shared DVR input. Camera Link adds both capabilities:
+
+- View Front DVR, DVR Camera 2, backup/reverse, or DVR + Reverse split screen from an Android phone or tablet over a private Tailscale connection.
+- Keep remote viewing available after the ignition turns off while parking mode keeps the radio, cameras, Internet connection, and VPN powered.
+- Record the independent backup/reverse camera and one selected DVR input to USB at the same time. Front and DVR2 share one hardware decoder, so those two inputs cannot be recorded simultaneously.
+- Temporarily switch Front/DVR2 from the phone, then restore the radio's saved input and its recording when remote live view closes.
+
+ATOTO's [official parking-recording comparison](https://www.atotodirect.com/blogs/guides/what-is-parking-recording-how-atoto-smart-parking-monitoring-helps-protect-your-vehicle-while-parked) lists mobile-app remote viewing for X10 but not S8 Gen4. Its [X10 D-DVR overview](https://www.atotodirect.com/en-us/blogs/x10/atoto-x10-d-dvr-dual-camera-recorder) advertises remote wake and live camera viewing through SSHub. This project provides the core remote-view capability for compatible S8 hardware without requiring an X10 radio. A completely powered-off radio remains unreachable.
+
 ## Fixed
 
 - Parking mode now mirrors the factory DVR's sentry, duration, voltage, and activation settings and pre-arms the ATOTO MCU keep-awake heartbeat before ACC-off.
