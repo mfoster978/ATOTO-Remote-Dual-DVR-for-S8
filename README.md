@@ -1,8 +1,11 @@
 # ATOTO Remote Dual DVR for S8
 
+> [!CAUTION]
+> **The v1.5 and v1.6 downloads are withdrawn while parking-mode power handling is corrected and retested. Do not enable Camera Link parking mode or rely on it to keep the radio powered after ACC-off.** The app wrote ATOTO's `sentry_mode_enable` value to the wrong Android settings table, so the radio could enter sleep on the first five-second power check. Camera and remote-view features should only be tested with the ignition on until a corrected release is published.
+
 An independent DVR replacement and remote camera viewer for compatible ATOTO S8 radios. One APK can run in **Radio mode** on the head unit or **Phone mode** on an Android phone. The radio records directly to its DVR USB drive; the phone reaches it through a private Tailscale connection.
 
-[Download the latest APK](https://github.com/mfoster978/ATOTO-Remote-Dual-DVR-for-S8/releases/latest) · [Read the setup guide](#radio-installation) · [See tested hardware](#tested-hardware)
+[Read the setup guide](#radio-installation) · [See tested hardware](#tested-hardware)
 
 > This is a community project. It is not made, supported, or endorsed by ATOTO or Tailscale.
 

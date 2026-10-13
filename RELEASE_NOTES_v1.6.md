@@ -1,5 +1,8 @@
 # ATOTO Remote Dual DVR for S8 v1.6
 
+> [!CAUTION]
+> **Withdrawn:** do not use v1.6 parking mode. It wrote ATOTO's sentry setting to the wrong Android settings table, so the S8 could enter sleep on the first five-second ACC-off check. This release is being replaced after live power-cycle testing.
+
 Version 1.6 fixes cold-boot recording, remote live video, shared Front/DVR2 input switching, and ATOTO parking-power integration found during testing on the S8.
 
 ## Why it matters
