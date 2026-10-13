@@ -8,9 +8,10 @@ An independent DVR replacement and remote camera viewer for compatible ATOTO S8 
 
 ## What it adds
 
-- Native, low-latency radio views for **Front**, **Reverse**, and **Front + Reverse** split screen.
+- Native, low-latency radio views for **Front**, **DVR Camera 2**, **Reverse**, and a selected DVR input + Reverse split screen.
 - Simultaneous front and reverse MP4 recording when both physical inputs are installed and available.
-- Phone live view for Front, Reverse, or both feeds through the radio's private Tailscale address.
+- Phone live view for Front, DVR Camera 2, Reverse, or a DVR input + Reverse through the radio's private Tailscale address.
+- Temporary phone DVR-input switching that restores the radio's saved Front/DVR2 input when the remote viewer closes.
 - Optional vehicle audio in recordings and phone live view. The radio microphone setting is the master privacy control.
 - Native radio video player, photo viewer, protect/unprotect actions, deletion, and USB storage details.
 - One, two, or three-minute H.264 loop clips with optional AAC audio.
@@ -58,39 +59,49 @@ Other S8 hardware and firmware revisions may expose different camera IDs, storag
 | --- | --- | --- |
 | Front DVR | Android camera 0, front input | Reverse |
 | Reverse | Android camera 1 | Front DVR |
-| DVR Camera 2 | Second input on ATOTO's camera-0 video mux | Reverse, after privileged mux switching |
+| DVR Camera 2 | Second input on ATOTO's camera-0 video mux | Reverse, using the included radio bridge |
 
-Front DVR and DVR Camera 2 share one hardware decoder. ATOTO's factory DVR switches that mux through `/dev/videomux13`; a normal shareable APK receives `EACCES`. Camera Link can index existing DVR Camera 2 recordings, but live switching to that lens requires ATOTO system privileges. Even the factory app switches between Front and DVR Camera 2 instead of opening both together.
+Front DVR and DVR Camera 2 share one hardware decoder. ATOTO's factory DVR switches that mux through `/dev/videomux13`; a normal shareable APK receives `EACCES`. The release therefore contains a small radio-only bridge that asks the signed ATOTO video service to perform that hardware switch. Front and DVR2 cannot be captured simultaneously. A temporary phone switch records the selected input in a new clip, then Camera Link restores the radio's saved input and resumes it in another clip. Reverse camera 1 remains independent.
 
 An unavailable camera may appear black on some firmware. Confirm its live picture before enabling automatic recording.
 
 ## Radio installation
 
-1. Download `ATOTO-Remote-Dual-DVR-for-S8-v1.5.apk` from the [latest release](https://github.com/mfoster978/ATOTO-Remote-Dual-DVR-for-S8/releases/latest).
+1. Download `ATOTO-Remote-Dual-DVR-for-S8-v1.6.apk` from the [latest release](https://github.com/mfoster978/ATOTO-Remote-Dual-DVR-for-S8/releases/latest).
 2. Install it and choose **Set up this ATOTO radio**.
 3. Allow Camera and Microphone access. Cabin audio can be disabled under **DVR Settings**.
-4. Keep the DVR USB flash drive inserted, open **DVR Settings**, and enable automatic recording only after confirming the installed camera's live picture.
-5. Open **Internet & Tailscale**, install the included Tailscale APK, sign in, and set Tailscale as Android's **Always-on VPN**.
-6. Set an owner PIN if desired. The PIN protects recordings and settings while leaving local live view available.
-7. Install the same release on the phone, choose Phone mode, and scan the radio's setup QR.
+4. Open **DVR Settings → Prepare included bridge for ADB**. Camera Link copies its bundled helper to `/sdcard/Download/ATOTO-Mux-Bridge.apk` and displays the commands below.
+5. Keep the DVR USB flash drive inserted and enable automatic recording only after confirming each installed camera's live picture.
+6. Open **Internet & Tailscale**, install the included Tailscale APK, sign in, and set Tailscale as Android's **Always-on VPN**.
+7. Set an owner PIN if desired. The PIN protects recordings and settings while leaving local live view available.
+8. Install the same release on the phone, choose Phone mode, and scan the radio's setup QR.
 
-The factory DVR and Camera Link should not compete for camera 0. Use Wireless ADB once to remove the factory DVR for Android user 0:
-
-```text
-adb shell pm uninstall -k --user 0 com.hcn.dvr
-```
-
-The signed factory APK remains in the system image. Restore it at any time with:
+Keep the signed factory DVR package installed because the included bridge uses its video-mux service. If it was previously removed for Android user 0, restore it:
 
 ```text
 adb shell cmd package install-existing --user 0 com.hcn.dvr
 ```
 
-Parking mode needs one additional one-time Wireless ADB permission. It survives restarts and ordinary app updates:
+The helper targets ATOTO's legacy settings API, so this firmware's package verifier blocks a normal installer prompt. After preparing it in Camera Link, run these Wireless ADB commands once. The final two commands immediately restore the verifier settings:
+
+```text
+adb shell settings put global verifier_verify_adb_installs 0
+adb shell settings put global package_verifier_enable 0
+adb shell pm install -r /sdcard/Download/ATOTO-Mux-Bridge.apk
+adb shell settings delete global verifier_verify_adb_installs
+adb shell settings delete global package_verifier_enable
+```
+
+Do not open the factory DVR while Camera Link owns camera 0. The bridge starts only its signed mux service briefly and stops it after the requested input is selected.
+
+Parking power and automatic camera/audio access after a cold boot require this one-time Wireless ADB setup. The settings survive restarts and ordinary app updates:
 
 ```text
 adb shell pm grant com.codex.hn7camerastream android.permission.WRITE_SECURE_SETTINGS
+adb shell appops set com.codex.hn7camerastream SYSTEM_ALERT_WINDOW allow
 ```
+
+The app mirrors the factory DVR's parking duration, voltage, and activation keys and sends the ATOTO MCU sentry heartbeat. The second command enables Android's special background-launch access. Camera Link uses it only for a transparent 15-second bootstrap after startup so Android grants Camera and Microphone to the DVR service; it does not draw floating overlays.
 
 To include readable factory DVR folders in the library, use **Allow DVR library access** and enable Android's all-files-access switch for Camera Link. Camera Link can write to its own USB folders without that optional permission.
 
@@ -141,7 +152,7 @@ Android still requires the normal install/update confirmation. Future official r
 
 Remote access works only while Android, camera hardware, the radio's SIM or Wi-Fi, and Tailscale remain powered. Parking mode sends the S8 MCU sentry heartbeat until its selected duration or battery cutoff is reached. An APK cannot wake a fully powered-off radio.
 
-Some S8 firmware changes mobile-data or airplane-mode state after ACC turns off. Full remote viewing through a long parked period therefore depends on the vehicle wiring and firmware. That behavior has not yet been verified through a complete parked, key-off test on the tested unit.
+Some S8 firmware changes mobile-data or airplane-mode state after ACC turns off. Full remote viewing through a long parked period therefore depends on the vehicle wiring and firmware. Version 1.6 corrects the parking keys to the same `Settings.System` table used by ATOTO's factory DVR; a complete key-off test is still required on each radio and wiring setup.
 
 The owner PIN protects this app's controls. Android system Settings can still force-stop or uninstall an app or disable VPN unless the radio is provisioned as a managed device.
 
@@ -159,7 +170,7 @@ Run:
 ./build.ps1
 ```
 
-The build downloads the pinned official Tailscale APK when it is absent, verifies the Tailscale and ZXing checksums, compiles the source, signs the APK, and writes `ATOTO-Remote-Dual-DVR-for-S8-v1.5.apk` in the project root. The uncompressed universal Tailscale APK exceeds GitHub's normal per-file source limit, so it is not stored in this repository; it remains bundled inside the compressed release APK.
+The build downloads the pinned official Tailscale APK when it is absent, verifies the Tailscale and ZXing checksums, compiles the source, signs the APK, and writes `ATOTO-Remote-Dual-DVR-for-S8-v1.6.apk` in the project root. The uncompressed universal Tailscale APK exceeds GitHub's normal per-file source limit, so it is not stored in this repository; it remains bundled inside the compressed release APK.
 
 If the private release keystore is absent, the script creates a local development key. APKs signed with a different key cannot update installations from the official release. Never commit or share a signing keystore.
 

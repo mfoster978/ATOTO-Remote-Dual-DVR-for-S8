@@ -45,6 +45,7 @@ import android.os.IBinder;
 import android.os.Looper;
 import android.os.PowerManager;
 import android.os.StatFs;
+import android.provider.Settings;
 import android.util.Base64;
 import android.util.Log;
 import android.view.SurfaceHolder;
@@ -52,6 +53,7 @@ import android.view.SurfaceHolder;
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
@@ -89,6 +91,7 @@ public class CameraStreamService extends Service implements SensorEventListener,
     public static final String ACTION_AUDIO_CHANGED = "com.codex.hn7camerastream.AUDIO_CHANGED";
     public static final String ACTION_EMERGENCY_LOCK = "com.codex.hn7camerastream.EMERGENCY_LOCK";
     public static final String ACTION_PARKING_SETTINGS_CHANGED = "com.codex.hn7camerastream.PARKING_SETTINGS_CHANGED";
+    public static final String ACTION_BOOTSTRAP_RETRY = "com.codex.hn7camerastream.BOOTSTRAP_RETRY";
     public static final int PORT = 8765;
     public static final String USERNAME = "camera";
 
@@ -104,6 +107,8 @@ public class CameraStreamService extends Service implements SensorEventListener,
     private static final String ACTION_ATOTO_DVR_RECORD = "com.hcn.dvr.action.record";
     private static final String EXTRA_ATOTO_DVR_RECORD_STATE = "dvr_state";
     private static final long SYSTEM_UI_RECORDING_RECONCILE_MS = 5_000L;
+    private static final long CONFIGURED_RECORDING_RETRY_MS = 10_000L;
+    private static final long PARKING_STATE_POLL_MS = 2_000L;
     private static final long PARKING_HEARTBEAT_MS = 5_000L;
     private static volatile CameraStreamService runningInstance;
 
@@ -116,6 +121,12 @@ public class CameraStreamService extends Service implements SensorEventListener,
     private final AtomicBoolean encoding = new AtomicBoolean(false);
     private final AtomicBoolean recordFrameBusy = new AtomicBoolean(false);
     private final AtomicBoolean recordAudioBusy = new AtomicBoolean(false);
+    private final AtomicBoolean configuredRecordingRetryBusy = new AtomicBoolean(false);
+    private final Object remoteFrontInputLock = new Object();
+    private int remoteFrontStreams;
+    private int remoteDvr2Streams;
+    private int remoteLastRequestedInput;
+    private long remoteFrontInputGeneration;
 
     private volatile boolean running;
     private volatile byte[] latestJpeg;
@@ -186,6 +197,20 @@ public class CameraStreamService extends Service implements SensorEventListener,
         }
     };
 
+    private final Runnable configuredRecordingReconciler = new Runnable() {
+        @Override public void run() {
+            retryConfiguredRecordings();
+            parkingHandler.postDelayed(this, CONFIGURED_RECORDING_RETRY_MS);
+        }
+    };
+
+    private final Runnable parkingStateSupervisor = new Runnable() {
+        @Override public void run() {
+            superviseParkingState();
+            parkingHandler.postDelayed(this, PARKING_STATE_POLL_MS);
+        }
+    };
+
     private static final class WatermarkFrame {
         final String key;
         final int width;
@@ -227,6 +252,8 @@ public class CameraStreamService extends Service implements SensorEventListener,
         publishSystemUiRecordingState(false, true);
         parkingHandler.removeCallbacks(systemUiRecordingReconciler);
         parkingHandler.postDelayed(systemUiRecordingReconciler, SYSTEM_UI_RECORDING_RECONCILE_MS);
+        parkingHandler.removeCallbacks(configuredRecordingReconciler);
+        parkingHandler.postDelayed(configuredRecordingReconciler, CONFIGURED_RECORDING_RETRY_MS);
         sensorManager = (SensorManager) getSystemService(SENSOR_SERVICE);
         if (sensorManager != null) {
             accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
@@ -241,6 +268,8 @@ public class CameraStreamService extends Service implements SensorEventListener,
         wakeLock = power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "HN7CameraStream:server");
         wakeLock.acquire();
         initializeParkingController();
+        parkingHandler.removeCallbacks(parkingStateSupervisor);
+        parkingHandler.postDelayed(parkingStateSupervisor, PARKING_STATE_POLL_MS);
         startServer();
         requestTailscaleConnect();
 
@@ -292,10 +321,11 @@ public class CameraStreamService extends Service implements SensorEventListener,
             frontPipeline.stopRecordingBlocking(true);
         } else if (intent != null && ACTION_CAPTURE.equals(intent.getAction())) {
             final int cameraId = intent.getIntExtra("camera_id", 0);
+            final int primaryCameraId = intent.getIntExtra("primary_camera_id", 0) == 2 ? 2 : 0;
             new Thread(new Runnable() {
                 @Override public void run() {
                     if (cameraId == 3) {
-                        saveSnapshotBlocking(0);
+                        saveSnapshotBlocking(primaryCameraId);
                         saveSnapshotBlocking(1);
                     } else {
                         saveSnapshotBlocking(cameraId);
@@ -327,6 +357,9 @@ public class CameraStreamService extends Service implements SensorEventListener,
             triggerEmergencyLock("vehicle G-sensor");
         } else if (intent != null && ACTION_PARKING_SETTINGS_CHANGED.equals(intent.getAction())) {
             applyParkingSettings();
+        } else if (intent != null && ACTION_BOOTSTRAP_RETRY.equals(intent.getAction())) {
+            Log.i(TAG, "Visible boot bootstrap requested camera recording retry");
+            resumeConfiguredRecordings();
         }
         if (!running) startServer();
         return START_STICKY;
@@ -342,6 +375,8 @@ public class CameraStreamService extends Service implements SensorEventListener,
         if (runningInstance == this) runningInstance = null;
         parkingHandler.removeCallbacks(parkingHeartbeat);
         parkingHandler.removeCallbacks(systemUiRecordingReconciler);
+        parkingHandler.removeCallbacks(configuredRecordingReconciler);
+        parkingHandler.removeCallbacks(parkingStateSupervisor);
         parkingActive = false;
         if (accReceiver != null) {
             try { unregisterReceiver(accReceiver); } catch (Throwable ignored) { }
@@ -430,6 +465,13 @@ public class CameraStreamService extends Service implements SensorEventListener,
         if (ignitionOn) {
             parkingStatus = parkingEnabled() ? "Armed for ignition off" : "Parking mode off";
             vehicleBatteryVoltage = parkingBridge == null ? -1f : parkingBridge.readBatteryVoltage();
+            if (parkingBridge != null) {
+                if (parkingEnabled() && parkingBridge.sendSentryHeartbeat()) {
+                    parkingStatus = "Armed for ignition off • MCU keep-awake ready";
+                } else if (!parkingEnabled()) {
+                    parkingBridge.clearSentryHeartbeat();
+                }
+            }
             return;
         }
         if (parkingEnabled()) beginParkingSessionIfConfigured();
@@ -439,7 +481,11 @@ public class CameraStreamService extends Service implements SensorEventListener,
     private void configureSystemSentry() {
         boolean enabled = parkingEnabled();
         if (AtotoParkingBridge.canControlSystemSentry(this)) {
-            if (!AtotoParkingBridge.setSystemSentryEnabled(this, enabled)) {
+            SharedPreferences settings = getSharedPreferences("settings", MODE_PRIVATE);
+            if (!AtotoParkingBridge.syncSystemParkingSettings(this, enabled,
+                    settings.getInt("parking_duration_minutes", 960),
+                    settings.getInt("parking_voltage_tenths", 118),
+                    settings.getString("parking_activation_mode", "continuous"))) {
                 parkingStatus = "Could not update ATOTO parking setting";
             }
         } else if (enabled && !AtotoParkingBridge.isSystemSentryEnabled(this)) {
@@ -524,6 +570,7 @@ public class CameraStreamService extends Service implements SensorEventListener,
         getSharedPreferences("settings", MODE_PRIVATE).edit()
                 .putLong("parking_session_started_at", 0L)
                 .putString("parking_last_stop_reason", reason).apply();
+        if (parkingBridge != null) parkingBridge.clearSentryHeartbeat();
         if (!ignitionOn && (wasActive || (frontPipeline != null && frontPipeline.recording) || recording)) {
             new Thread(new Runnable() {
                 @Override public void run() {
@@ -537,6 +584,27 @@ public class CameraStreamService extends Service implements SensorEventListener,
         updateNotification(reason);
     }
 
+    private void superviseParkingState() {
+        if (parkingBridge == null) return;
+        int acc = parkingBridge.readAccStatus();
+        if (acc >= 0) {
+            boolean detectedIgnition = acc != 0;
+            if (detectedIgnition != ignitionOn) {
+                Log.i(TAG, "ATOTO ACC state changed by supervisor: " + detectedIgnition);
+                handleAccState(detectedIgnition);
+                return;
+            }
+        }
+        if (ignitionOn && parkingEnabled()) {
+            vehicleBatteryVoltage = parkingBridge.readBatteryVoltage();
+            if (parkingBridge.sendSentryHeartbeat()) {
+                parkingStatus = "Armed for ignition off • MCU keep-awake ready";
+            } else {
+                parkingStatus = "ATOTO parking pre-arm heartbeat failed: " + parkingBridge.getLastError();
+            }
+        }
+    }
+
     private void resumeConfiguredRecordings() {
         final SharedPreferences settings = getSharedPreferences("settings", MODE_PRIVATE);
         final boolean frontWanted = settings.getBoolean("primary_dvr_mode", false) &&
@@ -544,15 +612,46 @@ public class CameraStreamService extends Service implements SensorEventListener,
         final boolean reverseWanted = settings.getBoolean("record_camera_1", false);
         new Thread(new Runnable() {
             @Override public void run() {
-                if (frontWanted && frontPipeline != null && !frontPipeline.recordingRequested) {
+                if (frontWanted && frontPipeline != null && !frontPipeline.recording) {
                     frontPipeline.startRecordingBlocking(false);
                 }
-                if (reverseWanted && !recordingRequested) {
+                if (reverseWanted && !recording) {
                     try { startRecordingBlocking(1, false); }
                     catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
                 }
             }
         }, "HN7ResumeConfiguredRecording").start();
+    }
+
+    private void retryConfiguredRecordings() {
+        if (!ignitionOn && !parkingActive) return;
+        final SharedPreferences settings = getSharedPreferences("settings", MODE_PRIVATE);
+        final boolean frontWanted = settings.getBoolean("primary_dvr_mode", false) &&
+                settings.getBoolean("record_camera_0", false);
+        final boolean reverseWanted = settings.getBoolean("record_camera_1", false);
+        boolean frontMissing = frontWanted && frontPipeline != null && !frontPipeline.recording;
+        boolean reverseMissing = reverseWanted && !recording;
+        if ((!frontMissing && !reverseMissing) || !configuredRecordingRetryBusy.compareAndSet(false, true)) return;
+        new Thread(new Runnable() {
+            @Override public void run() {
+                try {
+                    if (frontWanted && frontPipeline != null && !frontPipeline.recording) {
+                        boolean started = frontPipeline.startRecordingBlocking(false);
+                        Log.i(TAG, "Boot/recovery front recording retry: " + started +
+                                (started ? "" : " • " + frontPipeline.recordingError));
+                    }
+                    if (reverseWanted && !recording) {
+                        boolean started = startRecordingBlocking(1, false);
+                        Log.i(TAG, "Boot/recovery reverse recording retry: " + started +
+                                (started ? "" : " • " + recordingError));
+                    }
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                } finally {
+                    configuredRecordingRetryBusy.set(false);
+                }
+            }
+        }, "HN7ConfiguredRecordingRetry").start();
     }
 
     private void pauseRecordingsForParkingSleep() {
@@ -905,6 +1004,63 @@ public class CameraStreamService extends Service implements SensorEventListener,
         catch (RuntimeException error) { Log.w(TAG, "Unable to request Tailscale connection", error); }
     }
 
+    private boolean requestAtotoFactoryMuxSelection(int channel) {
+        int requested = channel == 2 ? 2 : 0;
+        try {
+            getPackageManager().getPackageInfo("com.codex.hn7muxbridge", 0);
+        } catch (Throwable error) {
+            Log.w(TAG, "ATOTO mux bridge helper is not installed", error);
+            return false;
+        }
+        try {
+            Intent command = new Intent("com.codex.hn7muxbridge.SELECT_INPUT")
+                    .setClassName("com.codex.hn7muxbridge",
+                            "com.codex.hn7muxbridge.MuxBridgeReceiver")
+                    .addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES)
+                    .putExtra("camera_id", requested);
+            sendBroadcast(command);
+            // The helper starts ATOTO's signed VideoService long enough for its
+            // onCreate mux write, then stops it. Do not reopen camera 0 until that
+            // factory process has released its temporary camera objects.
+            try { Thread.sleep(1_000L); }
+            catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+            boolean muxConfirmed = false;
+            long deadline = System.currentTimeMillis() + 1_500L;
+            while (System.currentTimeMillis() < deadline) {
+                if (isAtotoMuxSelected(requested)) {
+                    muxConfirmed = true;
+                    break;
+                }
+                try { Thread.sleep(100L); }
+                catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+            Log.i(TAG, "Requested ATOTO factory mux channel " + requested +
+                    " confirmed=" + muxConfirmed);
+            return muxConfirmed;
+        } catch (Throwable error) {
+            Log.w(TAG, "ATOTO factory mux bridge is unavailable", error);
+            return false;
+        }
+    }
+
+    private boolean isAtotoMuxSelected(int requested) {
+        byte[] buffer = new byte[512];
+        try (FileInputStream input = new FileInputStream("/dev/videomux13")) {
+            int length = input.read(buffer);
+            if (length <= 0) return false;
+            String state = new String(buffer, 0, length, StandardCharsets.US_ASCII);
+            return state.contains("camera_mode=0") && state.contains("camera_ch_num=" + requested);
+        } catch (Throwable error) {
+            return false;
+        }
+    }
+
     private void handleClient(Socket socket) {
         try {
             BufferedReader reader = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.US_ASCII));
@@ -1036,7 +1192,17 @@ public class CameraStreamService extends Service implements SensorEventListener,
 
     private void streamMjpeg(Socket socket, OutputStream out, int cameraId) throws Exception {
         if (cameraId == 0 || cameraId == 2) {
-            frontPipeline.streamMjpeg(socket, out, cameraId);
+            synchronized (remoteFrontInputLock) {
+                if (cameraId == 2) remoteDvr2Streams++;
+                else remoteFrontStreams++;
+                remoteLastRequestedInput = cameraId;
+                remoteFrontInputGeneration++;
+            }
+            try {
+                frontPipeline.streamMjpeg(socket, out, cameraId);
+            } finally {
+                scheduleRadioDvrInputRestore(cameraId);
+            }
             return;
         }
         if (!ensureCamera(cameraId)) {
@@ -1066,6 +1232,41 @@ public class CameraStreamService extends Service implements SensorEventListener,
             out.flush();
             previouslySent = frame;
         }
+    }
+
+    private void scheduleRadioDvrInputRestore(final int disconnectedInput) {
+        final long generation;
+        synchronized (remoteFrontInputLock) {
+            if (disconnectedInput == 2) remoteDvr2Streams = Math.max(0, remoteDvr2Streams - 1);
+            else remoteFrontStreams = Math.max(0, remoteFrontStreams - 1);
+            generation = ++remoteFrontInputGeneration;
+        }
+        new Thread(new Runnable() {
+            @Override public void run() {
+                try { Thread.sleep(750L); }
+                catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+                synchronized (remoteFrontInputLock) {
+                    if (generation != remoteFrontInputGeneration) return;
+                    final int restore;
+                    if (remoteDvr2Streams > 0 && remoteFrontStreams == 0) restore = 2;
+                    else if (remoteFrontStreams > 0 && remoteDvr2Streams == 0) restore = 0;
+                    else if (remoteFrontStreams > 0) restore = remoteLastRequestedInput;
+                    else restore = configuredDvrInput();
+                    Log.i(TAG, "Remote DVR viewer ended; selecting input " + restore +
+                            " (front viewers=" + remoteFrontStreams +
+                            ", DVR2 viewers=" + remoteDvr2Streams + ")");
+                    frontPipeline.selectInputBlocking(restore);
+                }
+            }
+        }, "HN7RestoreRadioDvrInput").start();
+    }
+
+    private int configuredDvrInput() {
+        return getSharedPreferences("settings", MODE_PRIVATE)
+                .getInt("dvr_primary_camera", 0) == 2 ? 2 : 0;
     }
 
     private void writeSnapshot(OutputStream out, int cameraId) throws Exception {
@@ -1374,6 +1575,18 @@ public class CameraStreamService extends Service implements SensorEventListener,
             }
         }
         return best;
+    }
+
+    private Camera.Size chooseFactoryFrontSize(Camera.Parameters parameters) {
+        List<Camera.Size> sizes = parameters.getSupportedPreviewSizes();
+        if (sizes != null) {
+            for (Camera.Size size : sizes) {
+                if (size.width == 1920 && size.height == 1080) return size;
+            }
+        }
+        Camera.Size current = parameters.getPreviewSize();
+        if (current != null) return current;
+        return chooseSize(sizes);
     }
 
     private boolean startRecordingBlocking(final int cameraId, boolean persist) throws InterruptedException {
@@ -2003,13 +2216,18 @@ public class CameraStreamService extends Service implements SensorEventListener,
         private volatile String cameraError = "Front camera has not been opened";
         private volatile int frameWidth;
         private volatile int frameHeight;
+        private volatile int cameraBufferWidth;
+        private volatile int cameraBufferHeight;
         private volatile long lastJpegTime;
         private volatile boolean recording;
         private volatile boolean recordingRequested;
         private volatile String recordingError = "Front recording has not been enabled";
         private volatile String currentRecordingPath = "";
         private volatile String recordingDirectory = "";
-        private volatile int inputChannel;
+        // Unknown until /dev/videomux13 has actually been configured.  Starting
+        // this at zero made a fresh service incorrectly assume the front input
+        // was already selected and skip the hardware-mux write.
+        private volatile int inputChannel = -1;
         private volatile long previewFrameCount;
         private volatile long queuedFrameCount;
         private volatile long encodedFrameCount;
@@ -2077,7 +2295,7 @@ public class CameraStreamService extends Service implements SensorEventListener,
                 } else {
                     if (texture != null) try { texture.release(); } catch (Exception ignored) { }
                     texture = new SurfaceTexture(8766);
-                    texture.setDefaultBufferSize(Math.max(1, frameWidth), Math.max(1, frameHeight));
+                    texture.setDefaultBufferSize(Math.max(1, cameraBufferWidth), Math.max(1, cameraBufferHeight));
                     target.setPreviewTexture(texture);
                 }
                 target.startPreview();
@@ -2089,6 +2307,7 @@ public class CameraStreamService extends Service implements SensorEventListener,
 
         boolean openBlocking() {
             if (camera != null) return true;
+            if (inputChannel < 0 && !selectInputBlocking(configuredDvrInput())) return false;
             final CountDownLatch done = new CountDownLatch(1);
             final AtomicBoolean opened = new AtomicBoolean(false);
             handler.post(new Runnable() {
@@ -2103,28 +2322,41 @@ public class CameraStreamService extends Service implements SensorEventListener,
                         cameraError = "Opening front camera";
                         candidate = Camera.open(0);
                         Camera.Parameters parameters = candidate.getParameters();
-                        Camera.Size selected = chooseSize(parameters.getSupportedPreviewSizes());
+                        // ATOTO's TP2856 front-DVR pipeline and factory DVR app use
+                        // 1920x1080 buffers.  Forcing 1280x720 makes the driver place
+                        // the image in only the upper-left part of the buffer.
+                        Camera.Size selected = chooseFactoryFrontSize(parameters);
                         parameters.setPreviewSize(selected.width, selected.height);
                         parameters.setPreviewFormat(ImageFormat.NV21);
                         candidate.setParameters(parameters);
-                        frameWidth = selected.width;
-                        frameHeight = selected.height;
+                        Camera.Size applied = candidate.getParameters().getPreviewSize();
+                        cameraBufferWidth = applied.width;
+                        cameraBufferHeight = applied.height;
+                        frameWidth = Math.max(2, (cameraBufferWidth / 2) & ~1);
+                        frameHeight = Math.max(2, (cameraBufferHeight / 2) & ~1);
+                        Log.i(TAG, "Front camera buffer " + cameraBufferWidth + "x" + cameraBufferHeight +
+                                "; normalized output " + frameWidth + "x" + frameHeight);
                         SurfaceHolder holder = previewHolder;
                         if (holder != null && holder.getSurface() != null && holder.getSurface().isValid()) {
                             candidate.setPreviewDisplay(holder);
                         } else {
                             texture = new SurfaceTexture(8766);
-                            texture.setDefaultBufferSize(frameWidth, frameHeight);
+                            texture.setDefaultBufferSize(cameraBufferWidth, cameraBufferHeight);
                             candidate.setPreviewTexture(texture);
                         }
                         candidate.setPreviewCallback(new Camera.PreviewCallback() {
                             @Override public void onPreviewFrame(byte[] data, Camera source) {
                                 previewFrameCount++;
-                                if (recording) queueRecordingFrame(data, frameWidth, frameHeight);
                                 long now = System.currentTimeMillis();
-                                if (now - lastJpegTime < FRAME_INTERVAL_MS || !jpegBusy.compareAndSet(false, true)) return;
+                                boolean encodeJpeg = now - lastJpegTime >= FRAME_INTERVAL_MS &&
+                                        jpegBusy.compareAndSet(false, true);
+                                if (!recording && !encodeJpeg) return;
+                                final byte[] normalized = downscaleAtotoFrontFrame(data, cameraBufferWidth,
+                                        cameraBufferHeight, frameWidth, frameHeight);
+                                if (recording) queueRecordingFrame(normalized, frameWidth, frameHeight);
+                                if (!encodeJpeg) return;
                                 lastJpegTime = now;
-                                final byte[] copy = data.clone();
+                                final byte[] copy = normalized;
                                 final int width = frameWidth;
                                 final int height = frameHeight;
                                 jpegExecutor.execute(new Runnable() {
@@ -2178,15 +2410,19 @@ public class CameraStreamService extends Service implements SensorEventListener,
             return opened.get();
         }
 
-        boolean selectInputBlocking(int requestedCamera) {
-            final int desired = requestedCamera == 2 ? 1 : 0;
+        synchronized boolean selectInputBlocking(int requestedCamera) {
+            final int desired = requestedCamera == 2 ? 2 : 0;
             if (desired == inputChannel) return true;
+            Log.i(TAG, "Switching shared DVR input from " + inputChannel + " to " + desired);
             final CountDownLatch done = new CountDownLatch(1);
             final AtomicBoolean selected = new AtomicBoolean(false);
+            final AtomicBoolean restartRecording = new AtomicBoolean(false);
             handler.post(new Runnable() {
                 @Override public void run() {
                     boolean restart = recordingRequested && recording;
+                    restartRecording.set(restart);
                     if (restart) stopRecorderOnThread(false);
+                    closeCameraDeviceOnThread();
                     FileOutputStream output = null;
                     try {
                         output = new FileOutputStream(new File("/dev/videomux13"));
@@ -2197,18 +2433,61 @@ public class CameraStreamService extends Service implements SensorEventListener,
                         cameraError = "";
                         selected.set(true);
                     } catch (Throwable error) {
-                        cameraError = "DVR Camera 2 needs ATOTO video-mux access: " + error.getMessage();
-                        Log.e(TAG, "Unable to switch DVR input", error);
+                        boolean bridged = requestAtotoFactoryMuxSelection(desired);
+                        if (bridged || desired == 0) {
+                            // Retail installs cannot write this root-owned device.
+                            // The platform-signed factory service can set it while
+                            // Camera Link remains the only DVR/camera owner.
+                            inputChannel = desired;
+                            selected.set(true);
+                            Log.w(TAG, bridged ? "Using ATOTO factory video-mux bridge" :
+                                    "ATOTO video mux is read-only; using the current front input", error);
+                        } else {
+                            cameraError = "DVR Camera 2 needs ATOTO video-mux access: " + error.getMessage();
+                            Log.e(TAG, "Unable to switch DVR input", error);
+                        }
                     } finally {
                         if (output != null) try { output.close(); } catch (IOException ignored) { }
-                        if (restart) startRecorderOnThread();
                         done.countDown();
                     }
                 }
             });
             try { done.await(5, TimeUnit.SECONDS); }
             catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
+            if (selected.get() && restartRecording.get()) startRecordingBlocking(false);
             return selected.get();
+        }
+
+        private byte[] downscaleAtotoFrontFrame(byte[] source, int sourceWidth, int sourceHeight,
+                                                int outputWidth, int outputHeight) {
+            int sourceYSize = sourceWidth * sourceHeight;
+            int outputYSize = outputWidth * outputHeight;
+            int required = sourceYSize * 3 / 2;
+            if (source == null || source.length < required || outputWidth > sourceWidth ||
+                    outputHeight > sourceHeight) return source == null ? new byte[0] : source.clone();
+            byte[] output = new byte[outputYSize * 3 / 2];
+            for (int row = 0; row < outputHeight; row++) {
+                int sourceRow = (int) ((long) row * sourceHeight / outputHeight);
+                int sourceOffset = sourceRow * sourceWidth;
+                int outputOffset = row * outputWidth;
+                for (int column = 0; column < outputWidth; column++) {
+                    int sourceColumn = (int) ((long) column * sourceWidth / outputWidth);
+                    output[outputOffset + column] = source[sourceOffset + sourceColumn];
+                }
+            }
+            int sourceChroma = sourceYSize;
+            int outputChroma = outputYSize;
+            for (int row = 0; row < outputHeight / 2; row++) {
+                int sourceRow = (int) ((long) row * sourceHeight / outputHeight);
+                int sourceOffset = sourceChroma + sourceRow * sourceWidth;
+                int outputOffset = outputChroma + row * outputWidth;
+                for (int column = 0; column < outputWidth; column += 2) {
+                    int sourceColumn = (int) ((long) column * sourceWidth / outputWidth) & ~1;
+                    output[outputOffset + column] = source[sourceOffset + sourceColumn];
+                    output[outputOffset + column + 1] = source[sourceOffset + sourceColumn + 1];
+                }
+            }
+            return output;
         }
 
         void streamMjpeg(Socket socket, OutputStream out, int requestedCamera) throws Exception {
@@ -2354,7 +2633,7 @@ public class CameraStreamService extends Service implements SensorEventListener,
                 recordingError = "Front DVR USB storage limit reached";
                 return false;
             }
-            File output = new File(directory, (inputChannel == 1 ? "CL-D2-" : "CL-F-") + new SimpleDateFormat(
+            File output = new File(directory, (inputChannel == 2 ? "CL-D2-" : "CL-F-") + new SimpleDateFormat(
                     "yyyy-MMdd-HHmmss", Locale.US).format(new Date()) + "_recording.mp4");
             try {
                 synchronized (recordingMonitor) {
@@ -2391,7 +2670,7 @@ public class CameraStreamService extends Service implements SensorEventListener,
                     recordingError = "";
                     handler.removeCallbacks(rollSegment);
                     handler.postDelayed(rollSegment, segmentDurationMs());
-                    updateNotification(inputChannel == 1 ? "DVR Camera 2 recording to USB" : "Front DVR recording to USB");
+                    updateNotification(inputChannel == 2 ? "DVR Camera 2 recording to USB" : "Front DVR recording to USB");
                     Log.i(TAG, "Front recording started: " + currentRecordingPath);
                     return true;
                 }
@@ -2675,7 +2954,7 @@ public class CameraStreamService extends Service implements SensorEventListener,
                     recordingError = "Allow DVR library access so front clips can be written to USB";
                     return null;
                 }
-                File directory = new File(selected, inputChannel == 1 ? "ATOTO-Camera-Link/DVR2" : "ATOTO-Camera-Link/Front");
+                File directory = new File(selected, inputChannel == 2 ? "ATOTO-Camera-Link/DVR2" : "ATOTO-Camera-Link/Front");
                 if (!directory.exists() && !directory.mkdirs()) {
                     recordingError = "Cannot create the front recording folder";
                     return null;
@@ -2702,6 +2981,10 @@ public class CameraStreamService extends Service implements SensorEventListener,
 
         private void releaseOnThread() {
             stopRecorderOnThread(false);
+            closeCameraDeviceOnThread();
+        }
+
+        private void closeCameraDeviceOnThread() {
             Camera existing = camera;
             camera = null;
             if (existing != null) {
@@ -2715,6 +2998,8 @@ public class CameraStreamService extends Service implements SensorEventListener,
             }
             frameWidth = 0;
             frameHeight = 0;
+            cameraBufferWidth = 0;
+            cameraBufferHeight = 0;
             latestJpeg = null;
         }
 
@@ -2741,7 +3026,7 @@ public class CameraStreamService extends Service implements SensorEventListener,
             html.append("<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'>")
                     .append("<style>*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000}")
                     .append(".split{display:grid;grid-template-columns:").append(both ? "1fr 1fr" : "1fr")
-                    .append(";width:100%;height:100%;gap:2px}img{display:block;width:100%;height:100%;min-width:0;object-fit:cover}</style><div class=split>");
+                    .append(";width:100%;height:100%;gap:2px}img{display:block;width:100%;height:100%;min-width:0;object-fit:contain}</style><div class=split>");
             if (both) {
                 html.append("<img src='/stream?camera=0' alt='Front DVR'><img src='/stream?camera=1' alt='Reverse Camera'>");
             } else {

@@ -19,6 +19,7 @@ import java.nio.charset.StandardCharsets;
 
 public class MjpegView extends View {
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+    private final Object frameLock = new Object();
     private volatile boolean running;
     private volatile Bitmap frame;
     private Thread worker;
@@ -72,10 +73,12 @@ public class MjpegView extends View {
                         byte[] bytes = jpeg.toByteArray();
                         Bitmap decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
                         if (decoded != null) {
-                            Bitmap old = frame;
-                            frame = decoded;
+                            synchronized (frameLock) {
+                                Bitmap old = frame;
+                                frame = decoded;
+                                if (old != null && old != decoded && !old.isRecycled()) old.recycle();
+                            }
                             postInvalidate();
-                            if (old != null && old != decoded) old.recycle();
                         }
                         jpeg = null;
                     } else if (jpeg.size() > 6 * 1024 * 1024) {
@@ -94,21 +97,30 @@ public class MjpegView extends View {
 
     @Override protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
-        Bitmap bitmap = frame;
-        if (bitmap == null || bitmap.isRecycled()) return;
-        float scale = Math.min((float) getWidth() / bitmap.getWidth(), (float) getHeight() / bitmap.getHeight());
-        int width = Math.round(bitmap.getWidth() * scale);
-        int height = Math.round(bitmap.getHeight() * scale);
-        int left = (getWidth() - width) / 2;
-        int top = (getHeight() - height) / 2;
-        canvas.drawBitmap(bitmap, null, new Rect(left, top, left + width, top + height), paint);
+        if (getWidth() <= 0 || getHeight() <= 0) return;
+        synchronized (frameLock) {
+            Bitmap bitmap = frame;
+            if (bitmap == null || bitmap.isRecycled()) return;
+            // Fit the complete camera image inside the viewer. The radio screen and
+            // phone screen have different aspect ratios, so filling by cropping can
+            // make a correct stream look heavily zoomed on the phone.
+            float scale = Math.min((float) getWidth() / bitmap.getWidth(),
+                    (float) getHeight() / bitmap.getHeight());
+            int width = Math.round(bitmap.getWidth() * scale);
+            int height = Math.round(bitmap.getHeight() * scale);
+            int left = (getWidth() - width) / 2;
+            int top = (getHeight() - height) / 2;
+            canvas.drawBitmap(bitmap, null, new Rect(left, top, left + width, top + height), paint);
+        }
     }
 
     @Override protected void onDetachedFromWindow() {
         stop();
-        Bitmap old = frame;
-        frame = null;
-        if (old != null && !old.isRecycled()) old.recycle();
+        synchronized (frameLock) {
+            Bitmap old = frame;
+            frame = null;
+            if (old != null && !old.isRecycled()) old.recycle();
+        }
         super.onDetachedFromWindow();
     }
 }

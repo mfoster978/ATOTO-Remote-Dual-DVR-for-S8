@@ -20,11 +20,16 @@
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" />
+    <uses-permission android:name="android.permission.WRITE_SETTINGS" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <uses-permission android:name="com.codex.hn7muxbridge.permission.CONTROL_MUX" />
     <uses-feature android:name="android.hardware.camera.any" android:required="false" />
 
     <queries>
         <package android:name="com.tailscale.ipn" />
         <package android:name="com.hcn.dvr" />
+        <package android:name="com.codex.hn7muxbridge" />
     </queries>
 
     <application
@@ -56,6 +61,15 @@
             android:exported="false"
             android:screenOrientation="portrait"
             android:theme="@android:style/Theme.Material.Light.NoActionBar" />
+
+        <activity
+            android:name=".BootBootstrapActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:finishOnTaskLaunch="true"
+            android:noHistory="true"
+            android:showWhenLocked="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
 
         <service
             android:name=".CameraStreamService"

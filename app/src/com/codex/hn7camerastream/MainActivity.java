@@ -84,8 +84,8 @@ import java.util.Map;
 import java.util.Date;
 
 public class MainActivity extends Activity {
-    private static final String APP_VERSION_NAME = "1.5";
-    private static final int APP_VERSION_CODE = 15;
+    private static final String APP_VERSION_NAME = "1.6";
+    private static final int APP_VERSION_CODE = 16;
     private static final String GITHUB_REPOSITORY = "mfoster978/ATOTO-Remote-Dual-DVR-for-S8";
     private static final String GITHUB_REPOSITORY_URL = "https://github.com/" + GITHUB_REPOSITORY;
     private static final String GITHUB_LATEST_RELEASE_API = "https://api.github.com/repos/" + GITHUB_REPOSITORY + "/releases/latest";
@@ -153,6 +153,8 @@ public class MainActivity extends Activity {
     private long lastVehicleSyncAt;
     private boolean clearPhoneConnectionForm;
     private int radioPreviewCamera;
+    private int radioDvrCamera;
+    private final ArrayList<MjpegView> phoneLiveViews = new ArrayList<MjpegView>();
     private final PcmAudioPlayer liveAudioPlayer = new PcmAudioPlayer();
 
     @Override
@@ -162,6 +164,8 @@ public class MainActivity extends Activity {
         getWindow().setNavigationBarColor(BG);
         preferences = getSharedPreferences(PREFS, MODE_PRIVATE);
         radioPreviewCamera = preferences.getInt("dvr_preview_camera", 0);
+        radioDvrCamera = preferences.getInt("dvr_primary_camera", radioPreviewCamera == 2 ? 2 : 0);
+        if (radioDvrCamera != 2) radioDvrCamera = 0;
         if (importSetupUri(getIntent() == null ? null : getIntent().getData())) return;
         showCurrentMode();
     }
@@ -187,6 +191,11 @@ public class MainActivity extends Activity {
             installBundledTailscale();
             return;
         }
+        if (preferences.getBoolean("pending_mux_bridge_install", false)) {
+            preferences.edit().putBoolean("pending_mux_bridge_install", false).apply();
+            prepareBundledMuxBridgeForAdb();
+            return;
+        }
         String mode = preferences.getString(MODE_KEY, "");
         if (MODE_RADIO.equals(mode)) syncParkingSystemSetting();
         if (MODE_RADIO.equals(mode) && isOwnerLockEnabled() && !ownerUnlocked
@@ -196,7 +205,9 @@ public class MainActivity extends Activity {
             showRadioRecording();
         } else if (MODE_RADIO.equals(mode) && RADIO_DVR.equals(currentPage)) {
             showRadioDvr();
-        } else if (MODE_PHONE.equals(mode) && (PHONE_LIVE.equals(currentPage) || PHONE_RECORDINGS.equals(currentPage))) {
+        } else if (MODE_PHONE.equals(mode) && PHONE_LIVE.equals(currentPage)) {
+            showPhoneLive();
+        } else if (MODE_PHONE.equals(mode) && PHONE_RECORDINGS.equals(currentPage)) {
             requestPhoneTailscaleConnect();
         }
     }
@@ -213,6 +224,7 @@ public class MainActivity extends Activity {
     protected void onStop() {
         super.onStop();
         liveAudioPlayer.stop();
+        stopPhoneLiveViews();
         if (MODE_RADIO.equals(preferences.getString(MODE_KEY, "")) && isOwnerLockEnabled()) {
             ownerUnlocked = false;
         }
@@ -419,7 +431,7 @@ public class MainActivity extends Activity {
             LinearLayout split = new LinearLayout(this);
             split.setOrientation(LinearLayout.HORIZONTAL);
             split.setBackgroundColor(Color.BLACK);
-            split.addView(directPreviewPanel(0, "FRONT DVR"), new LinearLayout.LayoutParams(0,
+            split.addView(directPreviewPanel(radioDvrCamera, dvrCameraName(radioDvrCamera)), new LinearLayout.LayoutParams(0,
                     LinearLayout.LayoutParams.MATCH_PARENT, 1));
             split.addView(directPreviewPanel(1, "REVERSE"), new LinearLayout.LayoutParams(0,
                     LinearLayout.LayoutParams.MATCH_PARENT, 1));
@@ -490,13 +502,24 @@ public class MainActivity extends Activity {
     }
 
     private void addCameraChoice(LinearLayout row, String label, final int cameraId) {
-        TextView button = text(label, 13, TEXT, radioPreviewCamera == cameraId);
+        boolean selected = radioPreviewCamera == cameraId ||
+                (radioPreviewCamera == 3 && (cameraId == 3 || cameraId == radioDvrCamera));
+        TextView button = text(label, 13, TEXT, selected);
         button.setGravity(Gravity.CENTER);
-        button.setBackground(rounded(radioPreviewCamera == cameraId ? PRIMARY : Color.TRANSPARENT, dp(11)));
+        button.setBackground(rounded(selected ? PRIMARY : Color.TRANSPARENT, dp(11)));
         button.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View view) {
-                radioPreviewCamera = cameraId;
-                preferences.edit().putInt("dvr_preview_camera", cameraId).apply();
+                if (cameraId == 0 || cameraId == 2) {
+                    radioDvrCamera = cameraId;
+                    if (radioPreviewCamera != 3) radioPreviewCamera = cameraId;
+                } else if (cameraId == 3) {
+                    radioPreviewCamera = radioPreviewCamera == 3 ? radioDvrCamera : 3;
+                } else {
+                    radioPreviewCamera = cameraId;
+                }
+                preferences.edit()
+                        .putInt("dvr_primary_camera", radioDvrCamera)
+                        .putInt("dvr_preview_camera", radioPreviewCamera).apply();
                 showRadioDvr();
             }
         });
@@ -518,8 +541,9 @@ public class MainActivity extends Activity {
         Intent intent = new Intent(this, CameraStreamService.class);
         intent.setAction(CameraStreamService.ACTION_CAPTURE);
         intent.putExtra("camera_id", radioPreviewCamera);
+        intent.putExtra("primary_camera_id", radioDvrCamera);
         startService(intent);
-        toast(radioPreviewCamera == 3 ? "Saving front and reverse photos to USB." :
+        toast(radioPreviewCamera == 3 ? "Saving " + dvrCameraName(radioDvrCamera) + " and reverse photos to USB." :
                 "Saving a " + dvrCameraName(radioPreviewCamera) + " photo to USB.");
     }
 
@@ -778,7 +802,7 @@ public class MainActivity extends Activity {
     }
 
     private String dvrCameraName(int cameraId) {
-        if (cameraId == 3) return "FRONT + REVERSE";
+        if (cameraId == 3) return (radioDvrCamera == 2 ? "DVR CAMERA 2" : "FRONT DVR") + " + REVERSE";
         if (cameraId == 2) return "DVR CAMERA 2";
         if (cameraId == 1) return "REVERSE CAMERA";
         return "FRONT DVR";
@@ -800,7 +824,7 @@ public class MainActivity extends Activity {
                     .putBoolean("primary_dvr_mode", true).apply();
             Intent front = new Intent(this, CameraStreamService.class);
             front.setAction(enable ? CameraStreamService.ACTION_FRONT_RECORD_START : CameraStreamService.ACTION_FRONT_RECORD_STOP);
-            front.putExtra("camera_id", 0);
+            front.putExtra("camera_id", radioDvrCamera);
             Intent reverse = new Intent(this, CameraStreamService.class);
             reverse.setAction(enable ? CameraStreamService.ACTION_RECORD_START : CameraStreamService.ACTION_RECORD_STOP);
             if (enable) {
@@ -810,7 +834,7 @@ public class MainActivity extends Activity {
                 startService(front);
                 startService(reverse);
             }
-            toast(enable ? "Front and reverse recording started." : "Front and reverse recording stopped.");
+            toast(dvrCameraName(radioDvrCamera) + " and reverse recording " + (enable ? "started." : "stopped."));
             showRadioDvr();
             return;
         }
@@ -984,7 +1008,7 @@ public class MainActivity extends Activity {
         addAction(display, "Reverse camera", defaultCamera == 1 ? PRIMARY : SURFACE_2, new View.OnClickListener() {
             @Override public void onClick(View view) { setDefaultRadioCamera(1); }
         });
-        addAction(display, "Front + Reverse split", defaultCamera == 3 ? PRIMARY : SURFACE_2, new View.OnClickListener() {
+        addAction(display, dvrCameraName(radioDvrCamera) + " + Reverse split", defaultCamera == 3 ? PRIMARY : SURFACE_2, new View.OnClickListener() {
             @Override public void onClick(View view) { setDefaultRadioCamera(3); }
         });
         page.addView(display, cardParams());
@@ -995,7 +1019,9 @@ public class MainActivity extends Activity {
         addAction(dvr2, "Open DVR Camera 2", SURFACE_2, new View.OnClickListener() {
             @Override public void onClick(View view) {
                 radioPreviewCamera = 2;
-                preferences.edit().putInt("dvr_preview_camera", 2).apply();
+                radioDvrCamera = 2;
+                preferences.edit().putInt("dvr_preview_camera", 2)
+                        .putInt("dvr_primary_camera", 2).apply();
                 showRadioDvr();
             }
         });
@@ -1027,17 +1053,26 @@ public class MainActivity extends Activity {
         page.addView(reverse, cardParams());
 
         LinearLayout replace = card();
-        addCardTitle(replace, "One-time factory DVR replacement");
-        addBody(replace, "ATOTO installs its DVR as a signed system app and may re-enable a disabled package after reboot. Run the reversible per-user removal below once through Wireless ADB. The factory APK stays in the system image while Camera Link owns camera 0.");
-        addKeyValue(replace, "Remove factory DVR for this user", "pm uninstall -k --user 0 com.hcn.dvr");
-        addAction(replace, "Copy ADB command", SURFACE_2, new View.OnClickListener() {
+        boolean bridgeInstalled = isPackageInstalled("com.codex.hn7muxbridge");
+        addCardHeader(replace, "ATOTO camera input bridge",
+                bridgeInstalled ? "INSTALLED" : "REQUIRED FOR DVR 2",
+                bridgeInstalled ? GREEN : AMBER);
+        addBody(replace, "Camera Link includes a small radio-only helper that lets Front, DVR Camera 2, and temporary phone viewing switch ATOTO's shared video input safely. Prepare it here, then run the displayed one-time Wireless ADB commands. Keep ATOTO's factory DVR package installed because its signed service performs the hardware mux write; Camera Link stops that service immediately afterward.");
+        addAction(replace, bridgeInstalled ? "Prepare bridge update for ADB" : "Prepare included bridge for ADB",
+                bridgeInstalled ? SURFACE_2 : PRIMARY, new View.OnClickListener() {
             @Override public void onClick(View view) {
-                ClipboardManager clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-                clipboard.setPrimaryClip(ClipData.newPlainText("Camera Link setup", "adb shell pm uninstall -k --user 0 com.hcn.dvr"));
-                toast("ADB command copied.");
+                prepareBundledMuxBridgeForAdb();
             }
         });
-        addBody(replace, "Recovery command: adb shell cmd package install-existing --user 0 com.hcn.dvr");
+        addKeyValue(replace, "Factory package check", "cmd package install-existing --user 0 com.hcn.dvr");
+        addAction(replace, "Copy factory package command", SURFACE_2, new View.OnClickListener() {
+            @Override public void onClick(View view) {
+                ClipboardManager clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                clipboard.setPrimaryClip(ClipData.newPlainText("Camera Link setup",
+                        "adb shell cmd package install-existing --user 0 com.hcn.dvr"));
+                toast("Factory package command copied.");
+            }
+        });
         page.addView(replace, cardParams());
         showShell("DVR Settings", true, page);
     }
@@ -1082,7 +1117,7 @@ public class MainActivity extends Activity {
             addAction(parking, "Copy one-time ADB permission command", AMBER, new View.OnClickListener() {
                 @Override public void onClick(View view) { requestParkingSystemAccess(); }
             });
-            addBody(parking, "ATOTO protects the MCU sentry switch as a system-only setting. During the same Wireless ADB setup used to replace the factory DVR, run: pm grant com.codex.hn7camerastream android.permission.WRITE_SECURE_SETTINGS");
+            addBody(parking, "ATOTO protects its MCU parking keys as system settings. Run the copied one-time Wireless ADB setup so Camera Link can keep the radio awake and start its cameras after reboot.");
         }
 
         addCardHeader(parking, "Activation mode",
@@ -1183,8 +1218,11 @@ public class MainActivity extends Activity {
 
     private void syncParkingSystemSetting() {
         if (!AtotoParkingBridge.canControlSystemSentry(this)) return;
-        AtotoParkingBridge.setSystemSentryEnabled(this,
-                preferences.getBoolean("parking_mode_enabled", false));
+        AtotoParkingBridge.syncSystemParkingSettings(this,
+                preferences.getBoolean("parking_mode_enabled", false),
+                preferences.getInt("parking_duration_minutes", 960),
+                preferences.getInt("parking_voltage_tenths", 118),
+                preferences.getString("parking_activation_mode", "continuous"));
     }
 
     private void notifyParkingSettingsChanged() {
@@ -1195,13 +1233,14 @@ public class MainActivity extends Activity {
     }
 
     private void requestParkingSystemAccess() {
-        String command = "adb shell pm grant com.codex.hn7camerastream android.permission.WRITE_SECURE_SETTINGS";
+        String command = "adb shell pm grant com.codex.hn7camerastream android.permission.WRITE_SECURE_SETTINGS\n" +
+                "adb shell appops set com.codex.hn7camerastream SYSTEM_ALERT_WINDOW allow";
         ClipboardManager clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
         clipboard.setPrimaryClip(ClipData.newPlainText("Camera Link parking permission", command));
         new AlertDialog.Builder(this)
-                .setTitle("One-time parking permission")
-                .setMessage("The command is copied. Run it from the computer already connected by Wireless ADB:\n\n" +
-                        command + "\n\nReturn here and tap Refresh battery and status. This grants access only to Camera Link and survives radio restarts.")
+                .setTitle("One-time parking and boot access")
+                .setMessage("The two commands are copied. Run them from the computer already connected by Wireless ADB:\n\n" +
+                        command + "\n\nReturn here and tap Refresh battery and status. The first lets Camera Link control ATOTO parking mode. The second permits the app's brief transparent bootstrap after a cold start so Android makes Camera and Microphone available to the DVR service.")
                 .setPositiveButton("Done", null)
                 .show();
     }
@@ -1387,7 +1426,9 @@ public class MainActivity extends Activity {
 
     private void setDefaultRadioCamera(int cameraId) {
         radioPreviewCamera = cameraId;
-        preferences.edit().putInt("dvr_preview_camera", cameraId).apply();
+        if (cameraId == 0 || cameraId == 2) radioDvrCamera = cameraId;
+        preferences.edit().putInt("dvr_preview_camera", cameraId)
+                .putInt("dvr_primary_camera", radioDvrCamera).apply();
         toast(dvrCameraName(cameraId) + " is the default display.");
         showRadioRecording();
     }
@@ -1457,8 +1498,8 @@ public class MainActivity extends Activity {
         LinearLayout setup = card();
         addCardTitle(setup, "Radio setup checklist");
         addStep(setup, "1", "Allow camera and DVR library access; keep the DVR USB drive inserted.");
-        addStep(setup, "2", "Through Wireless ADB, run: adb shell pm uninstall -k --user 0 com.hcn.dvr");
-        addStep(setup, "3", "For parking mode, run once through Wireless ADB: adb shell pm grant com.codex.hn7camerastream android.permission.WRITE_SECURE_SETTINGS");
+        addStep(setup, "2", "In DVR Settings, prepare the included ATOTO camera input bridge and run its one-time Wireless ADB commands. Keep the factory com.hcn.dvr package installed for its signed hardware-mux service.");
+        addStep(setup, "3", "Open USB Recording > Parking mode and use Copy one-time ADB setup. Run its two commands once so parking power and automatic recording work after reboot.");
         addStep(setup, "4", "Open DVR Settings and enable automatic recording only for cameras installed in this vehicle.");
         addStep(setup, "5", "Install/open Tailscale, sign in, and make it Always-on in VPN settings.");
         addStep(setup, "6", "Set an owner PIN, then install this same APK on the phone and choose Phone mode.");
@@ -1475,10 +1516,13 @@ public class MainActivity extends Activity {
     private void showPhoneLive() {
         currentPage = PHONE_LIVE;
         liveAudioPlayer.stop();
+        stopPhoneLiveViews();
         LinearLayout page = newPage();
         final String host = preferences.getString(PHONE_HOST_KEY, "");
         final String pin = preferences.getString(PHONE_PIN_KEY, "");
         final int selectedCamera = preferences.getInt("phone_live_camera", 0);
+        final int selectedDvrCamera = preferences.getInt("phone_live_primary_camera",
+                selectedCamera == 2 ? 2 : 0) == 2 ? 2 : 0;
 
         addPhoneVehicleSelector(page);
 
@@ -1503,7 +1547,8 @@ public class MainActivity extends Activity {
             addAction(live, "Reverse camera", selectedCamera == 1 ? PRIMARY : SURFACE_2, new View.OnClickListener() {
                 @Override public void onClick(View view) { selectPhoneCamera(1); }
             });
-            addAction(live, "Front + Reverse", selectedCamera == 3 ? PRIMARY : SURFACE_2, new View.OnClickListener() {
+            addAction(live, (selectedDvrCamera == 2 ? "DVR Camera 2" : "Front DVR") + " + Reverse",
+                    selectedCamera == 3 ? PRIMARY : SURFACE_2, new View.OnClickListener() {
                 @Override public void onClick(View view) { selectPhoneCamera(3); }
             });
             final boolean sound = preferences.getBoolean("phone_live_sound", false);
@@ -1519,7 +1564,9 @@ public class MainActivity extends Activity {
 
         if (host.length() > 0 && pin.length() > 0) {
             LinearLayout viewer = card();
-            addCardTitle(viewer, dvrCameraName(selectedCamera));
+            addCardTitle(viewer, selectedCamera == 3 ?
+                    (selectedDvrCamera == 2 ? "DVR CAMERA 2" : "FRONT DVR") + " + REVERSE" :
+                    dvrCameraName(selectedCamera));
             if (selectedCamera == 3) {
                 LinearLayout split = new LinearLayout(this);
                 split.setOrientation(LinearLayout.HORIZONTAL);
@@ -1528,7 +1575,7 @@ public class MainActivity extends Activity {
                 split.addView(front, new LinearLayout.LayoutParams(0, dp(360), 1));
                 split.addView(reverse, new LinearLayout.LayoutParams(0, dp(360), 1));
                 viewer.addView(split, matchWrap());
-                startPhoneMjpeg(front, 0);
+                startPhoneMjpeg(front, selectedDvrCamera);
                 startPhoneMjpeg(reverse, 1);
             } else {
                 MjpegView stream = new MjpegView(this);
@@ -1575,7 +1622,18 @@ public class MainActivity extends Activity {
     }
 
     private void selectPhoneCamera(int cameraId) {
-        preferences.edit().putInt("phone_live_camera", cameraId).apply();
+        int selected = preferences.getInt("phone_live_camera", 0);
+        int primary = preferences.getInt("phone_live_primary_camera", selected == 2 ? 2 : 0) == 2 ? 2 : 0;
+        if (cameraId == 0 || cameraId == 2) {
+            primary = cameraId;
+            if (selected != 3) selected = cameraId;
+        } else if (cameraId == 3) {
+            selected = selected == 3 ? primary : 3;
+        } else {
+            selected = cameraId;
+        }
+        preferences.edit().putInt("phone_live_camera", selected)
+                .putInt("phone_live_primary_camera", primary).apply();
         showPhoneLive();
     }
 
@@ -1585,6 +1643,12 @@ public class MainActivity extends Activity {
         String pin = preferences.getString(PHONE_PIN_KEY, "");
         view.start("http://" + host + ":" + port + "/stream?camera=" + cameraId,
                 CameraStreamService.USERNAME, pin);
+        phoneLiveViews.add(view);
+    }
+
+    private void stopPhoneLiveViews() {
+        for (MjpegView view : new ArrayList<MjpegView>(phoneLiveViews)) view.stop();
+        phoneLiveViews.clear();
     }
 
     private void showPhoneRecordings() {
@@ -2994,6 +3058,71 @@ public class MainActivity extends Activity {
         install.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
         launchingTailscale = true;
         startActivity(install);
+    }
+
+    private void prepareBundledMuxBridgeForAdb() {
+        if (Build.VERSION.SDK_INT >= 30 && !Environment.isExternalStorageManager()) {
+            preferences.edit().putBoolean("pending_mux_bridge_install", true).apply();
+            toast("Allow Camera Link to stage the included bridge in Downloads, then return.");
+            openDvrLibraryAccess();
+            return;
+        }
+        if (Build.VERSION.SDK_INT < 30 && checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                != PackageManager.PERMISSION_GRANTED) {
+            preferences.edit().putBoolean("pending_mux_bridge_install", true).apply();
+            requestPermissions(new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, 45);
+            return;
+        }
+        toast("Copying the included bridge to Downloads...");
+        new Thread(new Runnable() {
+            @Override public void run() {
+                try {
+                    File downloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+                    if (!downloads.exists() && !downloads.mkdirs()) {
+                        throw new Exception("The Downloads folder could not be created.");
+                    }
+                    final File staged = new File(downloads, "ATOTO-Mux-Bridge.apk");
+                    InputStream input = getAssets().open(BundledApkProvider.MUX_BRIDGE_FILE_NAME);
+                    OutputStream output = new FileOutputStream(staged, false);
+                    byte[] buffer = new byte[65536];
+                    int count;
+                    while ((count = input.read(buffer)) >= 0) output.write(buffer, 0, count);
+                    output.close();
+                    input.close();
+                    runOnUiThread(new Runnable() {
+                        @Override public void run() { showMuxBridgeAdbInstructions(staged); }
+                    });
+                } catch (final Exception error) {
+                    runOnUiThread(new Runnable() {
+                        @Override public void run() {
+                            toast("Could not prepare the ATOTO camera bridge: " + error.getMessage());
+                        }
+                    });
+                }
+            }
+        }, "MuxBridgeStager").start();
+    }
+
+    private void showMuxBridgeAdbInstructions(File staged) {
+        final String commands =
+                "adb shell settings put global verifier_verify_adb_installs 0\n" +
+                "adb shell settings put global package_verifier_enable 0\n" +
+                "adb shell pm install -r /sdcard/Download/ATOTO-Mux-Bridge.apk\n" +
+                "adb shell settings delete global verifier_verify_adb_installs\n" +
+                "adb shell settings delete global package_verifier_enable";
+        new AlertDialog.Builder(this)
+                .setTitle("ATOTO camera bridge is ready")
+                .setMessage("The included helper was copied to:\n" + staged.getAbsolutePath() +
+                        "\n\nRun these commands once from the computer connected through Wireless ADB. The last two immediately restore Android's package-verification settings.\n\n" + commands)
+                .setNegativeButton("Close", null)
+                .setPositiveButton("Copy commands", new DialogInterface.OnClickListener() {
+                    @Override public void onClick(DialogInterface dialog, int which) {
+                        ClipboardManager clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                        clipboard.setPrimaryClip(ClipData.newPlainText("Camera Link bridge setup", commands));
+                        toast("Bridge setup commands copied.");
+                    }
+                })
+                .show();
     }
 
     private void openVpnSettings() {
