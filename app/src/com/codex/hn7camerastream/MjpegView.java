@@ -13,14 +13,19 @@ import android.view.View;
 
 import java.io.BufferedInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 
 public class MjpegView extends View {
+    public interface ConnectionListener { void onConnectionChanged(); }
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
     private final Object frameLock = new Object();
     private volatile boolean running;
+    private volatile long generation;
+    private volatile boolean streaming;
+    private ConnectionListener listener;
     private volatile Bitmap frame;
     private Thread worker;
     private HttpURLConnection connection;
@@ -31,46 +36,70 @@ public class MjpegView extends View {
     public synchronized void start(String url, String username, String password) {
         stop();
         running = true;
+        final long session = generation;
         final String streamUrl = url;
         final String auth = "Basic " + Base64.encodeToString(
                 (username + ":" + password).getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP);
         worker = new Thread(new Runnable() {
-            @Override public void run() { readStreamLoop(streamUrl, auth); }
+            @Override public void run() { readStreamLoop(streamUrl, auth, session); }
         }, "CameraLinkMjpeg");
         worker.start();
     }
 
     public synchronized void stop() {
         running = false;
+        generation++;
+        streaming = false;
         if (connection != null) connection.disconnect();
         connection = null;
         if (worker != null) worker.interrupt();
         worker = null;
     }
 
-    private void readStreamLoop(String streamUrl, String auth) {
-        while (running) {
-            readStreamOnce(streamUrl, auth);
-            if (!running) return;
+    public void setConnectionListener(ConnectionListener listener) { this.listener = listener; }
+    public boolean isStreaming() { return streaming; }
+    private boolean isCurrent(long session) { return running && generation == session; }
+
+    private void connectionChanged(final long session, boolean connected) {
+        synchronized (this) {
+            if (!isCurrent(session) || streaming == connected) return;
+            streaming = connected;
+        }
+        post(new Runnable() {
+            @Override public void run() {
+                if (isCurrent(session) && listener != null) listener.onConnectionChanged();
+            }
+        });
+    }
+
+    private void readStreamLoop(String streamUrl, String auth, long session) {
+        while (isCurrent(session)) {
+            readStreamOnce(streamUrl, auth, session);
+            if (!isCurrent(session)) return;
             try { Thread.sleep(1_500L); }
             catch (InterruptedException ignored) { return; }
         }
     }
 
-    private void readStreamOnce(String streamUrl, String auth) {
+    private void readStreamOnce(String streamUrl, String auth, long session) {
         BufferedInputStream input = null;
+        HttpURLConnection attempt = null;
         try {
-            connection = (HttpURLConnection) new URL(streamUrl).openConnection();
-            connection.setConnectTimeout(5_000);
-            connection.setReadTimeout(15_000);
-            connection.setRequestProperty("Authorization", auth);
-            connection.setUseCaches(false);
-            if (connection.getResponseCode() != 200) return;
-            input = new BufferedInputStream(connection.getInputStream(), 64 * 1024);
+            attempt = (HttpURLConnection) new URL(streamUrl).openConnection();
+            synchronized (this) {
+                if (!isCurrent(session)) return;
+                connection = attempt;
+            }
+            attempt.setConnectTimeout(5_000);
+            attempt.setReadTimeout(15_000);
+            attempt.setRequestProperty("Authorization", auth);
+            attempt.setUseCaches(false);
+            if (attempt.getResponseCode() != 200) return;
+            input = new BufferedInputStream(attempt.getInputStream(), 64 * 1024);
             ByteArrayOutputStream jpeg = null;
             int previous = -1;
             int value;
-            while (running && (value = input.read()) >= 0) {
+            while (isCurrent(session) && (value = input.read()) >= 0) {
                 if (jpeg == null) {
                     if (previous == 0xff && value == 0xd8) {
                         jpeg = new ByteArrayOutputStream(256 * 1024);
@@ -84,11 +113,16 @@ public class MjpegView extends View {
                         Bitmap decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
                         if (decoded != null) {
                             synchronized (frameLock) {
+                                if (!isCurrent(session)) {
+                                    decoded.recycle();
+                                    return;
+                                }
                                 Bitmap old = frame;
                                 frame = decoded;
                                 if (old != null && old != decoded && !old.isRecycled()) old.recycle();
                             }
                             postInvalidate();
+                            connectionChanged(session, true);
                         }
                         jpeg = null;
                     } else if (jpeg.size() > 6 * 1024 * 1024) {
@@ -97,13 +131,16 @@ public class MjpegView extends View {
                 }
                 previous = value;
             }
-        } catch (Throwable ignored) {
+        } catch (IOException | RuntimeException ignored) {
         } finally {
             if (input != null) {
                 try { input.close(); } catch (Throwable ignored) { }
             }
-            if (connection != null) connection.disconnect();
-            connection = null;
+            if (attempt != null) attempt.disconnect();
+            synchronized (this) {
+                if (connection == attempt) connection = null;
+            }
+            connectionChanged(session, false);
         }
     }
 

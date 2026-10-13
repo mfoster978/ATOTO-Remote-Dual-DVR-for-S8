@@ -12,6 +12,7 @@ import android.util.Log;
 public class BootReceiver extends BroadcastReceiver {
     private static final String ACTION_ACC_ON_RECOVERY =
             "com.codex.hn7camerastream.ACC_ON_RECOVERY";
+    private static final long[] RECOVERY_DELAYS_MS = {12_000L, 35_000L, 70_000L, 120_000L, 180_000L};
 
     @Override
     public void onReceive(Context context, Intent intent) {
@@ -30,10 +31,12 @@ public class BootReceiver extends BroadcastReceiver {
         if (ACTION_ACC_ON_RECOVERY.equals(action)) {
             int recoveredAcc = accState.read();
             if (recoveredAcc != 1) {
+                if (recoveredAcc == 0) EnhancedDvrBootstrap.stopForAccOff(context);
                 Log.i("HN7CameraStream", "ACC-on recovery skipped; state=" + recoveredAcc);
                 return;
             }
             requestTailscale(context);
+            EnhancedDvrBootstrap.initialize(context);
             Intent service = new Intent(context, CameraStreamService.class)
                     .setAction(CameraStreamService.ACTION_BOOTSTRAP_RETRY);
             try { context.startForegroundService(service); }
@@ -44,38 +47,41 @@ public class BootReceiver extends BroadcastReceiver {
             return;
         }
         if ("android.mcu.device.action.ACC".equals(action)) {
-            boolean accOn = intent.getBooleanExtra("AccStatus", false);
-            AtotoAccState.noteBroadcast(accOn);
-            if (!accOn) {
-                // ATOTO's original VideoService exclusively owns the ACC-off
-                // transition. Never start Camera Link, Tailscale, or an alarm
-                // during that transition.
-                cancelCameraBootstrap(context);
-                try { context.stopService(new Intent(context, CameraStreamService.class)); }
-                catch (RuntimeException ignored) { }
-                Log.i("HN7CameraStream", "ACC off; custom camera service stopped");
-                return;
-            }
-            requestTailscale(context);
-            Intent service = new Intent(context, CameraStreamService.class);
-            try { context.startForegroundService(service); }
-            catch (RuntimeException ignored) { }
-            scheduleCameraBootstrap(context);
-            scheduleServerRecovery(context);
+            handleAccBroadcast(context, intent);
             return;
         }
         int acc = accState.read();
         if (acc != 1) {
             try { context.stopService(new Intent(context, CameraStreamService.class)); }
             catch (RuntimeException ignored) { }
-            scheduleServerRecovery(context);
+            if (acc == 0) EnhancedDvrBootstrap.stopForAccOff(context);
+            else {
+                EnhancedDvrBootstrap.initialize(context);
+                scheduleServerRecovery(context);
+            }
             Log.i("HN7CameraStream", "Start deferred for ACC-on recovery checks; state=" + acc);
             return;
         }
         requestTailscale(context);
+        EnhancedDvrBootstrap.initialize(context);
         Intent service = new Intent(context, CameraStreamService.class);
         try { context.startForegroundService(service); }
         catch (RuntimeException ignored) { }
+        scheduleCameraBootstrap(context);
+        scheduleServerRecovery(context);
+    }
+
+    static void handleAccBroadcast(Context context, Intent intent) {
+        if (!intent.hasExtra("AccStatus")) return;
+        boolean accOn = intent.getBooleanExtra("AccStatus", false);
+        AtotoAccState.noteBroadcast(accOn);
+        if (!accOn) {
+            EnhancedDvrBootstrap.stopForAccOff(context);
+            Log.i("HN7CameraStream", "ACC off; custom camera service stopped");
+            return;
+        }
+        EnhancedDvrBootstrap.initialize(context);
+        requestTailscale(context);
         scheduleCameraBootstrap(context);
         scheduleServerRecovery(context);
     }
@@ -121,13 +127,12 @@ public class BootReceiver extends BroadcastReceiver {
     private static void scheduleServerRecovery(Context context) {
         AlarmManager alarms = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
         if (alarms == null) return;
-        long[] delays = new long[]{12_000L, 35_000L};
-        for (int index = 0; index < delays.length; index++) {
+        for (int index = 0; index < RECOVERY_DELAYS_MS.length; index++) {
             Intent retry = new Intent(context, BootReceiver.class)
                     .setAction(ACTION_ACC_ON_RECOVERY);
             PendingIntent pending = PendingIntent.getBroadcast(context, 8767 + index, retry,
                     PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-            long triggerAt = SystemClock.elapsedRealtime() + delays[index];
+            long triggerAt = SystemClock.elapsedRealtime() + RECOVERY_DELAYS_MS[index];
             try {
                 if (Build.VERSION.SDK_INT >= 23) {
                     alarms.setExactAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME, triggerAt, pending);
@@ -145,7 +150,7 @@ public class BootReceiver extends BroadcastReceiver {
         Log.i("HN7CameraStream", "Scheduled ACC-on server recovery checks");
     }
 
-    private static void cancelCameraBootstrap(Context context) {
+    static void cancelCameraBootstrap(Context context) {
         AlarmManager alarms = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
         if (alarms == null) return;
         Intent bootstrap = new Intent(context, BootBootstrapActivity.class)
@@ -156,7 +161,7 @@ public class BootReceiver extends BroadcastReceiver {
         try { alarms.cancel(pending); }
         catch (RuntimeException ignored) { }
         pending.cancel();
-        for (int index = 0; index < 2; index++) {
+        for (int index = 0; index < RECOVERY_DELAYS_MS.length; index++) {
             Intent retry = new Intent(context, BootReceiver.class)
                     .setAction(ACTION_ACC_ON_RECOVERY);
             PendingIntent recovery = PendingIntent.getBroadcast(context, 8767 + index, retry,

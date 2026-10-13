@@ -45,6 +45,7 @@ import android.os.HandlerThread;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.StatFs;
+import android.os.SystemClock;
 import android.util.Base64;
 import android.util.Log;
 import android.view.SurfaceHolder;
@@ -61,6 +62,8 @@ import java.io.RandomAccessFile;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.InetSocketAddress;
+import java.net.InetAddress;
+import java.net.NetworkInterface;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
@@ -69,6 +72,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.Date;
+import java.util.Enumeration;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.CountDownLatch;
@@ -108,6 +112,7 @@ public class CameraStreamService extends Service implements SensorEventListener,
     private static final long SYSTEM_UI_RECORDING_RECONCILE_MS = 5_000L;
     private static final long CONFIGURED_RECORDING_RETRY_MS = 10_000L;
     private static final long ACC_STATE_POLL_MS = 2_000L;
+    private static final long VPN_RETRY_MS = 20_000L;
     private static volatile CameraStreamService runningInstance;
 
     private final ExecutorService clients = Executors.newCachedThreadPool();
@@ -140,7 +145,7 @@ public class CameraStreamService extends Service implements SensorEventListener,
     private volatile String currentRecordingPath = "";
     private volatile String recordingDirectory = "";
 
-    private ServerSocket serverSocket;
+    private volatile ServerSocket serverSocket;
     private Thread serverThread;
     private HandlerThread cameraThread;
     private Handler cameraHandler;
@@ -175,6 +180,9 @@ public class CameraStreamService extends Service implements SensorEventListener,
     private AtotoAccState accState;
     private BroadcastReceiver accReceiver;
     private volatile boolean ignitionOn;
+    private volatile boolean destroyed;
+    private boolean initialized;
+    private long lastVpnRequestAt = -VPN_RETRY_MS;
     private Boolean lastPublishedSystemUiRecordingState;
 
     private final Runnable systemUiRecordingReconciler = new Runnable() {
@@ -194,7 +202,7 @@ public class CameraStreamService extends Service implements SensorEventListener,
     private final Runnable accStateSupervisor = new Runnable() {
         @Override public void run() {
             superviseAccState();
-            serviceHandler.postDelayed(this, ACC_STATE_POLL_MS);
+            if (!destroyed && ignitionOn) serviceHandler.postDelayed(this, ACC_STATE_POLL_MS);
         }
     };
 
@@ -246,6 +254,7 @@ public class CameraStreamService extends Service implements SensorEventListener,
         cameraHandler = new Handler(cameraThread.getLooper());
         frontPipeline = new FrontPipeline();
         microphoneHub = new MicrophoneHub();
+        initialized = true;
         publishSystemUiRecordingState(false, true);
         serviceHandler.removeCallbacks(systemUiRecordingReconciler);
         serviceHandler.postDelayed(systemUiRecordingReconciler, SYSTEM_UI_RECORDING_RECONCILE_MS);
@@ -289,7 +298,7 @@ public class CameraStreamService extends Service implements SensorEventListener,
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        if (!hasConfirmedAccNow()) {
+        if (!initialized || !hasConfirmedAccNow()) {
             ignitionOn = false;
             Log.i(TAG, "Ignoring service start without confirmed ACC-on for S8 power safety");
             stopSelf();
@@ -372,6 +381,7 @@ public class CameraStreamService extends Service implements SensorEventListener,
 
     @Override
     public void onDestroy() {
+        destroyed = true;
         if (runningInstance == this) runningInstance = null;
         serviceHandler.removeCallbacks(systemUiRecordingReconciler);
         serviceHandler.removeCallbacks(configuredRecordingReconciler);
@@ -384,8 +394,7 @@ public class CameraStreamService extends Service implements SensorEventListener,
         if (locationManager != null) {
             try { locationManager.removeUpdates(this); } catch (Throwable ignored) { }
         }
-        running = false;
-        try { if (serverSocket != null) serverSocket.close(); } catch (IOException ignored) {}
+        stopServer();
         recordingRequested = false;
         releaseCameraBlocking();
         if (microphoneHub != null) microphoneHub.shutdown();
@@ -453,6 +462,7 @@ public class CameraStreamService extends Service implements SensorEventListener,
         if (ignitionOn) {
             if (frontPipeline != null) frontPipeline.refreshFactoryState();
             if (!running) startServer();
+            if (!hasTailscaleInterface()) requestTailscaleConnect();
         }
     }
 
@@ -787,41 +797,92 @@ public class CameraStreamService extends Service implements SensorEventListener,
     }
 
     private synchronized void startServer() {
-        if (running || !ignitionOn || !hasConfirmedAccNow()) return;
+        if (destroyed || running || !ignitionOn || !hasConfirmedAccNow()) return;
+        final ServerSocket listener;
+        try {
+            listener = new ServerSocket();
+        } catch (IOException error) {
+            Log.e(TAG, "Unable to create HTTP listener; will retry", error);
+            return;
+        }
+        try {
+            listener.setReuseAddress(true);
+            listener.bind(new InetSocketAddress(PORT));
+        } catch (IOException error) {
+            try { listener.close(); } catch (IOException ignored) { }
+            Log.e(TAG, "Unable to bind HTTP port; will retry", error);
+            return;
+        }
+        serverSocket = listener;
         running = true;
+        Log.i(TAG, "HTTP server listening on port " + PORT);
         serverThread = new Thread(new Runnable() {
             @Override public void run() {
                 try {
-                    ServerSocket listener = new ServerSocket();
-                    listener.setReuseAddress(true);
-                    listener.bind(new InetSocketAddress(PORT));
-                    serverSocket = listener;
-                    while (running) {
-                        final Socket socket = serverSocket.accept();
+                    while (!destroyed && running && serverSocket == listener) {
+                        final Socket socket = listener.accept();
                         socket.setSoTimeout(15000);
-                        clients.execute(new Runnable() {
-                            @Override public void run() { handleClient(socket); }
-                        });
+                        try {
+                            clients.execute(new Runnable() {
+                                @Override public void run() { handleClient(socket); }
+                            });
+                        } catch (RuntimeException error) {
+                            socket.close();
+                            throw error;
+                        }
                     }
-                } catch (IOException e) {
-                    if (running) Log.e(TAG, "HTTP server stopped", e);
+                } catch (IOException | RuntimeException error) {
+                    if (!destroyed && running) Log.e(TAG, "HTTP server stopped; will retry", error);
                 } finally {
-                    running = false;
-                    try { if (serverSocket != null) serverSocket.close(); }
+                    try { listener.close(); }
                     catch (IOException ignored) { }
-                    serverSocket = null;
+                    synchronized (CameraStreamService.this) {
+                        if (serverSocket == listener) {
+                            running = false;
+                            serverSocket = null;
+                            serverThread = null;
+                        }
+                    }
                 }
             }
         }, "HN7CameraHttp");
         serverThread.start();
     }
 
+    private synchronized void stopServer() {
+        running = false;
+        ServerSocket listener = serverSocket;
+        serverSocket = null;
+        try { if (listener != null) listener.close(); }
+        catch (IOException ignored) { }
+    }
+
     private void requestTailscaleConnect() {
-        if (!ignitionOn || !hasConfirmedAccNow()) return;
+        if (destroyed || !ignitionOn || !hasConfirmedAccNow()) return;
+        long now = SystemClock.elapsedRealtime();
+        if (now - lastVpnRequestAt < VPN_RETRY_MS) return;
+        lastVpnRequestAt = now;
         Intent tailscale = new Intent("com.tailscale.ipn.CONNECT_VPN");
         tailscale.setPackage("com.tailscale.ipn");
         try { sendBroadcast(tailscale); }
         catch (RuntimeException error) { Log.w(TAG, "Unable to request Tailscale connection", error); }
+    }
+
+    private boolean hasTailscaleInterface() {
+        try {
+            Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
+            while (interfaces != null && interfaces.hasMoreElements()) {
+                NetworkInterface network = interfaces.nextElement();
+                if (!network.isUp() || !network.getName().startsWith("tun")) continue;
+                Enumeration<InetAddress> addresses = network.getInetAddresses();
+                while (addresses.hasMoreElements()) {
+                    byte[] address = addresses.nextElement().getAddress();
+                    if (address.length == 4 && (address[0] & 255) == 100 &&
+                            (address[1] & 255) >= 64 && (address[1] & 255) <= 127) return true;
+                }
+            }
+        } catch (IOException ignored) { }
+        return false;
     }
 
     private void handleClient(Socket socket) {

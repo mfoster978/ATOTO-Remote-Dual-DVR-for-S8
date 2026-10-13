@@ -16,8 +16,8 @@ $ClassesJar = Join-Path $Out 'camera-link-enhancements.jar'
 $Unsigned = Join-Path $Out 'enhanced-stock-dvr-unsigned.apk'
 $WithDex = Join-Path $Out 'enhanced-stock-dvr-with-dex.apk'
 $Aligned = Join-Path $Out 'enhanced-stock-dvr-aligned.apk'
-$Signed = Join-Path $Out 'ATOTO-S8-Enhanced-Stock-DVR-v2.0.2.apk'
-$Published = Join-Path $ProjectRoot 'ATOTO-S8-Enhanced-Stock-DVR-v2.0.2.apk'
+$Signed = Join-Path $Out 'ATOTO-S8-Enhanced-Stock-DVR-v2.0.3.apk'
+$Published = Join-Path $ProjectRoot 'ATOTO-S8-Enhanced-Stock-DVR-v2.0.3.apk'
 $ZxingJar = Join-Path $ProjectRoot 'app\lib\zxing-core-3.5.3.jar'
 $ExpectedCertificate = 'c8a2e9bccf597c2fb6dc66bee293fc13f2fc47ec77bc6b2b0d52c11f51192ab8'
 
@@ -59,8 +59,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Apktool decode failed.' }
 
 $ApktoolYaml = Join-Path $DecodeRoot 'apktool.yml'
 $Yaml = Get-Content -Raw -LiteralPath $ApktoolYaml
-$Yaml = $Yaml -replace '(?m)^  versionCode:.*$', '  versionCode: 210002'
-$Yaml = $Yaml -replace '(?m)^  versionName:.*$', '  versionName: 2.0.2-camera-link'
+$Yaml = $Yaml -replace '(?m)^  versionCode:.*$', '  versionCode: 210003'
+$Yaml = $Yaml -replace '(?m)^  versionName:.*$', '  versionName: 2.0.3-camera-link'
 [IO.File]::WriteAllText($ApktoolYaml, $Yaml, $Utf8NoBom)
 
 $Manifest = Join-Path $DecodeRoot 'AndroidManifest.xml'
@@ -130,6 +130,48 @@ $Needle
 if (-not $Smali.Contains($Needle)) { throw 'Factory camera callback patch point was not found.' }
 $Smali = $Smali.Replace($Needle, $CameraPatch)
 [IO.File]::WriteAllText($CameraSmali, $Smali, $Utf8NoBom)
+
+# Observe the native background service and its existing ACC broadcast. The
+# original recorder, parking settings, sentry manager, and MCU calls stay intact.
+$VideoServicePath = Join-Path $DecodeRoot 'smali\com\hcn\dvr\service\VideoService.smali'
+$VideoServiceSmali = Get-Content -Raw -LiteralPath $VideoServicePath
+$OriginalVideoServiceSmali = $VideoServiceSmali
+foreach ($method in @('onCreate()V', 'onStartCommand(Landroid/content/Intent;II)I', 'onDestroy()V')) {
+    $pattern = '(?ms)^\.method public ' + [regex]::Escape($method) + '\r?\n.*?^\.end method'
+    $matches = [regex]::Matches($VideoServiceSmali, $pattern)
+    if ($matches.Count -ne 1) { throw "Factory VideoService $method patch point was not found exactly once." }
+    $hook = if ($method -eq 'onDestroy()V') {
+        '    invoke-static {}, Lcom/codex/hn7camerastream/EnhancedDvrBootstrap;->onFactoryServiceDestroyed()V'
+    } else {
+        '    invoke-static {p0}, Lcom/codex/hn7camerastream/EnhancedDvrBootstrap;->initialize(Landroid/content/Context;)V'
+    }
+    $methodText = $matches[0].Value
+    $returns = [regex]::Matches($methodText, '(?m)^    return(?:-void| [vp]\d+)\r?$')
+    if ($returns.Count -ne 1) { throw "Factory VideoService $method has an unexpected return layout." }
+    $VideoServiceSmali = $VideoServiceSmali.Insert($matches[0].Index + $returns[0].Index,
+        $hook + [Environment]::NewLine + [Environment]::NewLine)
+}
+[IO.File]::WriteAllText($VideoServicePath, $VideoServiceSmali, $Utf8NoBom)
+
+$AccReceiverPath = Join-Path $DecodeRoot 'smali\com\hcn\dvr\service\VideoService$BackCarBroadcastReceiver.smali'
+$AccReceiverSmali = Get-Content -Raw -LiteralPath $AccReceiverPath
+$OriginalAccReceiverSmali = $AccReceiverSmali
+$AccReceiverPattern = '(?m)(^\.method public onReceive\(Landroid/content/Context;Landroid/content/Intent;\)V\r?\n    \.locals \d+)'
+$AccReceiverMatch = [regex]::Matches($AccReceiverSmali, $AccReceiverPattern)
+if ($AccReceiverMatch.Count -ne 1) { throw 'Factory background ACC receiver patch point was not found exactly once.' }
+$AccReceiverSmali = $AccReceiverSmali.Insert($AccReceiverMatch[0].Index + $AccReceiverMatch[0].Length,
+    [Environment]::NewLine + [Environment]::NewLine +
+    '    invoke-static {p1, p2}, Lcom/codex/hn7camerastream/EnhancedDvrBootstrap;->onFactoryBroadcast(Landroid/content/Context;Landroid/content/Intent;)V')
+[IO.File]::WriteAllText($AccReceiverPath, $AccReceiverSmali, $Utf8NoBom)
+
+# Fail the build if an observer patch ever removes or changes native instructions.
+foreach ($pair in @(@($OriginalVideoServiceSmali, $VideoServiceSmali), @($OriginalAccReceiverSmali, $AccReceiverSmali))) {
+    $originalLines = (($pair[0] -split '\r?\n' | Where-Object { $_.Trim() }) -join "`n")
+    $patchedLines = (($pair[1] -split '\r?\n' | Where-Object {
+        $_.Trim() -and $_ -notmatch 'invoke-static .*EnhancedDvrBootstrap;'
+    }) -join "`n")
+    if ($originalLines -cne $patchedLines) { throw 'Remote startup observer changed original factory service instructions.' }
+}
 
 $ActivitySmaliPath = Join-Path $DecodeRoot 'smali\com\hcn\dvr\HDvrActivity.smali'
 $ActivitySmali = Get-Content -Raw -LiteralPath $ActivitySmaliPath
@@ -335,7 +377,7 @@ if ($LASTEXITCODE -ne 0 -or $SignedCertificate -notmatch "SHA-256 digest: $Expec
     throw 'Enhanced stock DVR signature verification failed.'
 }
 $Badging = (& (Join-Path $BuildTools 'aapt2.exe') dump badging $Signed) -join [Environment]::NewLine
-if ($LASTEXITCODE -ne 0 -or $Badging -notmatch "package: name='com.hcn.dvr' versionCode='210002' versionName='2.0.2-camera-link'") {
+if ($LASTEXITCODE -ne 0 -or $Badging -notmatch "package: name='com.hcn.dvr' versionCode='210003' versionName='2.0.3-camera-link'") {
     throw 'Enhanced APK did not preserve the package or apply the expected high version.'
 }
 $ArchiveEntries = (& (Join-Path $JavaRoot 'bin\jar.exe') tf $Signed) -join [Environment]::NewLine

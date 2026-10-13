@@ -84,8 +84,8 @@ import java.util.Map;
 import java.util.Date;
 
 public class MainActivity extends Activity {
-    private static final String APP_VERSION_NAME = "2.0.2";
-    private static final int APP_VERSION_CODE = 20002;
+    private static final String APP_VERSION_NAME = "2.0.3";
+    private static final int APP_VERSION_CODE = 20003;
     private static final String GITHUB_REPOSITORY = "mfoster978/ATOTO-Remote-Dual-DVR-for-S8";
     private static final String GITHUB_REPOSITORY_URL = "https://github.com/" + GITHUB_REPOSITORY;
     private static final String GITHUB_LATEST_RELEASE_API = "https://api.github.com/repos/" + GITHUB_REPOSITORY + "/releases/latest";
@@ -1529,13 +1529,29 @@ public class MainActivity extends Activity {
         showPhoneLive();
     }
 
-    private void startPhoneMjpeg(MjpegView view, int cameraId) {
+    private void startPhoneMjpeg(final MjpegView view, int cameraId) {
         String host = preferences.getString(PHONE_HOST_KEY, "");
         String port = preferences.getString(PHONE_PORT_KEY, Integer.toString(CameraStreamService.PORT));
         String pin = preferences.getString(PHONE_PIN_KEY, "");
+        view.setConnectionListener(new MjpegView.ConnectionListener() {
+            @Override public void onConnectionChanged() { updatePhoneLiveConnectionStatus(); }
+        });
         view.start("http://" + host + ":" + port + "/stream?camera=" + cameraId,
                 CameraStreamService.USERNAME, pin);
         phoneLiveViews.add(view);
+    }
+
+    private void updatePhoneLiveConnectionStatus() {
+        if (!activityResumed || !PHONE_LIVE.equals(currentPage) || status == null) return;
+        int connected = 0;
+        for (MjpegView view : phoneLiveViews) if (view.isStreaming()) connected++;
+        if (connected > 0 && connected == phoneLiveViews.size()) {
+            status.setText("Live camera connection active.");
+        } else if (connected > 0) {
+            status.setText("One camera connected. Waiting for the other camera...");
+        } else {
+            status.setText("Waiting for the radio. Live view will reconnect automatically...");
+        }
     }
 
     private void stopPhoneLiveViews() {
@@ -2526,7 +2542,7 @@ public class MainActivity extends Activity {
                 } else if (PHONE_RECORDINGS.equals(currentPage) && webView != null) {
                     loadPhoneUrl("/recordings");
                 } else if (PHONE_LIVE.equals(currentPage) && status != null) {
-                    status.setText("Connected securely to the radio.");
+                    updatePhoneLiveConnectionStatus();
                 }
                 syncActiveVehicleName();
             }
