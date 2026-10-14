@@ -84,8 +84,8 @@ import java.util.Map;
 import java.util.Date;
 
 public class MainActivity extends Activity {
-    private static final String APP_VERSION_NAME = "2.0.5";
-    private static final int APP_VERSION_CODE = 20005;
+    private static final String APP_VERSION_NAME = "2.0.6";
+    private static final int APP_VERSION_CODE = 20006;
     private static final String GITHUB_REPOSITORY = "mfoster978/ATOTO-Remote-Dual-DVR-for-S8";
     private static final String GITHUB_REPOSITORY_URL = "https://github.com/" + GITHUB_REPOSITORY;
     private static final String GITHUB_LATEST_RELEASE_API = "https://api.github.com/repos/" + GITHUB_REPOSITORY + "/releases/latest";

@@ -1,6 +1,6 @@
 # ATOTO Remote Dual DVR for S8 V4
 
-**PARKING MONITOR MODE IS AUTOMATICALLY DISABLED BY THIS UPDATE.** Version 2.0.5 checks the saved setting and turns it off if it was enabled; users do not have to remember to disable it first. Installing this update removes the ability to use or enable factory DVR parking monitoring. It is locked off because factory resets were reported during parking-mode testing, and that feature is still in development. Tapping its control displays an explanation. This release is for testing recording, playback, and remote viewing while the vehicle is on.
+**PARKING MONITOR MODE IS AUTOMATICALLY DISABLED BY THIS UPDATE.** Version 2.0.6 checks the saved setting and turns it off if it was enabled; users do not have to remember to disable it first. Installing this update removes the ability to use or enable factory DVR parking monitoring. It is locked off because factory resets were reported during parking-mode testing, and that feature is still in development. Tapping its control displays an explanation. This release is for testing recording, playback, and remote viewing while the vehicle is on.
 
 ATOTO Remote Dual DVR for S8 V4 extends the factory DVR on compatible ATOTO S8 V4 radios and adds a separate Android viewer for phones and tablets.
 
@@ -79,7 +79,7 @@ Camera images, private addresses, credentials, GPS coordinates, and personal rec
 
 ## Tested radio
 
-The project is being tested on the S8 V4 unit below. Version 2.0.5 disables parking monitoring so recording, playback, remote access, and the newly installed backup camera can be tested separately. The owner reports that a key-off/restart test with parking disabled no longer factory-reset the radio. This is an observation on the tested unit, not proof of the original reset mechanism.
+The project is being tested on the S8 V4 unit below. Version 2.0.6 disables parking monitoring so recording, playback, remote access, and the newly installed backup camera can be tested separately. The owner reports that a key-off/restart test with parking disabled no longer factory-reset the radio. This is an observation on the tested unit, not proof of the original reset mechanism.
 
 | Property | Tested value |
 | --- | --- |
@@ -98,7 +98,7 @@ Other S8 models and firmware builds may use different camera IDs, storage mounts
 
 Installing this update disables factory DVR parking monitoring, including any previously saved enabled setting.
 
-1. Download **`ATOTO-S8-Enhanced-Stock-DVR-v2.0.5.apk`** from the latest GitHub Release.
+1. Download **`ATOTO-S8-Enhanced-Stock-DVR-v2.0.6.apk`** from the latest GitHub Release.
 2. Install it on the radio as an update to the existing ATOTO DVR. Do not uninstall the factory DVR first; the package data and original app identity must remain available.
 3. Open **DVR**. The familiar ATOTO camera screen and settings remain in place.
 4. Tap **LINK** to open the added side menu.
@@ -109,11 +109,11 @@ Installing this update disables factory DVR parking monitoring, including any pr
 
 Wireless ADB is needed only to install or service the radio APK when the normal package installer is unavailable. It is not required for daily recording, phone viewing, or playback after setup.
 
-The release uses version code `210005` and version name `2.0.5-camera-link` for the enhanced radio package so Android and the in-app updater recognize it as newer than v2.0.4. Update the viewer to v2.0.5 as well for its improved dual-camera layout. Both apps can use Check for updates to download their matching APK from the latest regular GitHub release.
+The release uses version code `210006` and version name `2.0.6-camera-link` for the enhanced radio package so Android and the in-app updater recognize it as newer than v2.0.4. Update the viewer to v2.0.6 as well for its improved dual-camera layout. Both apps can use Check for updates to download their matching APK from the latest regular GitHub release.
 
 ## Install on the phone or tablet
 
-1. Download **`Camera-Link-Viewer-v2.0.5.apk`** from the same release.
+1. Download **`Camera-Link-Viewer-v2.0.6.apk`** from the same release.
 2. Install Tailscale from the Play Store or use the installer offered by Camera Link Viewer.
 3. Sign in to the same tailnet as the radio and approve Android's VPN request.
 4. Open Camera Link Viewer and scan the setup QR shown on the radio.
@@ -178,7 +178,7 @@ The phone/tablet viewer can be built on Windows with Android SDK build tools, Po
 ./build.ps1
 ```
 
-The script verifies the pinned ZXing and official Tailscale dependencies, compiles the source, signs the viewer, and writes `Camera-Link-Viewer-v2.0.5.apk`.
+The script verifies the pinned ZXing and official Tailscale dependencies, compiles the source, signs the viewer, and writes `Camera-Link-Viewer-v2.0.6.apk`.
 
 The radio build is an additive patch applied to a compatible factory DVR APK:
 

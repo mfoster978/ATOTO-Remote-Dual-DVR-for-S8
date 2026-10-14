@@ -84,6 +84,7 @@ public final class StockDvrUiBridge {
         private View factoryCameraLayout;
         private TextureView factoryPreview;
         private int factoryTopMargin;
+        private int factoryTopAnchor = -1;
         private View ownerDockGate;
         private View ownerPinOverlay;
         private int mode = MODE_FRONT;
@@ -114,6 +115,9 @@ public final class StockDvrUiBridge {
             factoryCameraLayout = cameraLayoutId == 0 ? null : activity.findViewById(cameraLayoutId);
             if (factoryCameraLayout != null && factoryCameraLayout.getLayoutParams() instanceof ViewGroup.MarginLayoutParams) {
                 factoryTopMargin = ((ViewGroup.MarginLayoutParams) factoryCameraLayout.getLayoutParams()).topMargin;
+                try { factoryTopAnchor = factoryCameraLayout.getLayoutParams().getClass().getField("topToTop")
+                        .getInt(factoryCameraLayout.getLayoutParams()); }
+                catch (ReflectiveOperationException ignored) { }
             }
             int previewId = activity.getResources().getIdentifier("surface_view", "id", activity.getPackageName());
             View preview = previewId == 0 ? null : activity.findViewById(previewId);
@@ -642,6 +646,13 @@ public final class StockDvrUiBridge {
                         layoutMode == MODE_SPLIT_TOP_BOTTOM || layoutMode == MODE_SPLIT_LEFT_RIGHT ?
                                 topInset(activity) : factoryTopMargin;
             }
+            // The factory pane belongs to ConstraintLayout: an unanchored child
+            // ignores margins. Anchor it while split, then restore its native state.
+            try {
+                params.getClass().getField("topToTop").setInt(params,
+                        layoutMode == MODE_SPLIT_TOP_BOTTOM || layoutMode == MODE_SPLIT_LEFT_RIGHT ?
+                                0 : factoryTopAnchor);
+            } catch (ReflectiveOperationException ignored) { }
             if (params instanceof FrameLayout.LayoutParams) {
                 ((FrameLayout.LayoutParams) params).gravity = layoutMode == MODE_SPLIT_LEFT_RIGHT ?
                         Gravity.START : layoutMode == MODE_SPLIT_TOP_BOTTOM ? Gravity.TOP : Gravity.CENTER;

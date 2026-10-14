@@ -16,8 +16,8 @@ public final class EnhancedDvrBootstrap {
     private static Context application;
     private static AtotoAccState accState;
     private static long unknownAccDeadline;
-    private static boolean factoryServiceAlive;
-    private static long lastFactoryServiceRequest;
+    private static volatile boolean factoryServiceAlive;
+    private static volatile long lastFactoryServiceRequest;
     private static final Runnable recovery = new Runnable() {
         @Override public void run() { reconcileSafely(); }
     };
