@@ -69,13 +69,25 @@ Available inputs depend on the cameras installed in each vehicle. Confirm a real
 
 ## Screenshots
 
+Fresh views from version **2.0.6**, captured on the tested S8 V4 and the Android phone viewer. GPS/location watermark text is covered with solid privacy masks in the published camera images.
+
+**Factory DVR with live Front camera**
+
+![Factory DVR live Front camera with location watermark masked](docs/screenshots/radio-front-live-v2.0.6.png)
+
+| Front + Reverse: top and bottom | Front + Reverse: left and right |
+| --- | --- |
+| ![Radio top and bottom live split with location watermark masked](docs/screenshots/radio-split-top-bottom-v2.0.6.png) | ![Radio left and right live split](docs/screenshots/radio-split-left-right-v2.0.6.png) |
+
+**Android phone/tablet live viewer**
+
+<img src="docs/screenshots/phone-dual-live-v2.0.6.png" alt="Camera Link Viewer showing Front and Reverse live cameras with GPS coordinates masked" width="360">
+
 | Enhanced DVR settings | Radio setup guide |
 | --- | --- |
 | ![Enhanced DVR settings](docs/screenshots/radio-dvr-settings.png) | ![Radio setup guide](docs/screenshots/radio-setup-guide.png) |
 
-![GitHub update controls](docs/screenshots/radio-app-updates.png)
-
-Camera images, private addresses, credentials, GPS coordinates, and personal recordings are excluded from the repository screenshots.
+Camera views are included with the owner's permission. Private connection addresses, credentials, readable GPS coordinates, and personal recording files are excluded. The phone screenshot was captured in an Android test emulator connected to the radio's real camera streams. [Screenshot capture and redaction notes](docs/screenshots/README.md).
 
 ## Tested radio
 
