@@ -24,6 +24,9 @@ public final class StartupRecoveryTest {
         SystemClock.now += 1_000_000;
         CarStatus.state = acc;
         CameraStreamService.instance = null;
+        com.hcn.dvr.utils.DataHelper.instance = new com.hcn.dvr.utils.DataHelper();
+        com.hcn.dvr.utils.Utils.CAMERA_SIGNAL = false;
+        com.hcn.dvr.manager.AudioCaptureManager.starts = 0;
         return new Context();
     }
     static Intent ignition(boolean on) {
@@ -33,7 +36,9 @@ public final class StartupRecoveryTest {
         Context context = reset(1);
         EnhancedDvrBootstrap.initialize(context);
         check(context.starts == 1, "Factory background startup must not require an activity");
+        check(context.factoryStarts==1,"Package replacement must request native VideoService before the remote camera service");
         EnhancedDvrBootstrap.initialize(context);
+        Handler.advance(650);
         check(Handler.pending() == 1 && context.starts == 1, "Repeated native starts must have one watcher");
         CameraStreamService.instance = null;
         Handler.advance(10_000);
@@ -41,9 +46,9 @@ public final class StartupRecoveryTest {
         System.out.println("PASS background start and service-loss recovery");
 
         EnhancedDvrBootstrap.onFactoryBroadcast(context, ignition(false));
-        int previousStarts = context.starts, previousVpn = context.vpn;
+        int previousStarts = context.starts, previousVpn = context.vpn, previousFactory = context.factoryStarts;
         Handler.advance(300_000);
-        check(context.starts == previousStarts && context.vpn == previousVpn && Handler.pending() == 0,
+        check(context.starts == previousStarts && context.vpn == previousVpn && context.factoryStarts==previousFactory && Handler.pending() == 0,
                 "ACC-off must stop remote work and VPN requests");
         check(context.alarms.alarms.isEmpty(), "ACC-off must cancel every recovery alarm");
         EnhancedDvrBootstrap.onFactoryBroadcast(context, ignition(true));
@@ -82,7 +87,52 @@ public final class StartupRecoveryTest {
         check(context.stops > 0, "Alarm errors must not prevent stopping the remote service or escape into stock code");
         System.out.println("PASS bounded unknown state, launch retries, and error isolation");
 
+        verifyAutoRecording();
         verifyViewerSessions();
+    }
+
+    static void verifyAutoRecording() {
+        Context context=reset(1);
+        com.hcn.dvr.utils.DataHelper helper=com.hcn.dvr.utils.DataHelper.instance;
+        helper.auto=true; helper.audio=true;
+        EnhancedDvrBootstrap.initialize(context);
+        Handler.advance(10_000);
+        check(helper.cameraController.starts==0 && helper.cameraController.opens==0,"Do not record before USB and camera signal settle");
+        helper.usb=true; com.hcn.dvr.utils.Utils.CAMERA_SIGNAL=true;
+        Handler.advance(1_000);
+        check(helper.cameraController.opens>0 && helper.cameraController.starts==0,"Wait for native camera open completion");
+        helper.cameraController.opened=true;
+        Handler.advance(2_000);
+        check(helper.cameraController.encoding && helper.cameraController.starts==1,"Start native recording with no activity or second input controller");
+        check(helper.cameraController.path.equals("/storage/udisk1/dvr/daily/"),"Use native DVR USB directory");
+        check(com.hcn.dvr.manager.AudioCaptureManager.starts==1,"Start factory microphone only when enabled");
+        helper.cameraController.encoding=false;
+        EnhancedDvrBootstrap.initialize(context); Handler.advance(60_000);
+        check(helper.cameraController.starts==1,"Manual stop must survive repeated server recovery callbacks");
+        EnhancedDvrBootstrap.onFactoryBroadcast(context,ignition(false));
+        EnhancedDvrBootstrap.onFactoryBroadcast(context,ignition(true)); Handler.advance(2_000);
+        check(helper.cameraController.starts==2 && helper.cameraController.encoding,"Next key-on must rearm factory auto-record");
+        System.out.println("PASS background native auto-record, delayed USB/signal/open readiness, microphone, and key-on rearm");
+
+        context=reset(1); helper=com.hcn.dvr.utils.DataHelper.instance;
+        helper.auto=true; helper.usb=true; helper.cameraController.opened=true;
+        com.hcn.dvr.utils.Utils.CAMERA_SIGNAL=true;
+        EnhancedDvrBootstrap.initialize(context);
+        EnhancedDvrBootstrap.onFactoryBroadcast(context,ignition(false)); Handler.advance(200_000);
+        check(helper.cameraController.starts==0 && com.hcn.dvr.manager.AudioCaptureManager.starts==0,"Key-off must cancel pending encoder and audio commands");
+        context=reset(1); helper=com.hcn.dvr.utils.DataHelper.instance;
+        helper.usb=true; helper.cameraController.opened=true; com.hcn.dvr.utils.Utils.CAMERA_SIGNAL=true;
+        EnhancedDvrBootstrap.initialize(context); Handler.advance(200_000);
+        check(helper.cameraController.starts==0,"Respect disabled factory auto-record setting");
+        context=reset(1); helper=com.hcn.dvr.utils.DataHelper.instance;
+        helper.auto=true; helper.usb=true; helper.failStart=true; helper.cameraController.opened=true; com.hcn.dvr.utils.Utils.CAMERA_SIGNAL=true;
+        EnhancedDvrBootstrap.initialize(context); Handler.advance(200_000);
+        int failedStarts=helper.cameraController.starts; Handler.advance(100_000);
+        check(failedStarts>0 && helper.cameraController.starts==failedStarts,"Encoder startup failures must have a bounded retry window");
+        check(com.hcn.dvr.manager.AudioCaptureManager.starts==0,"Disabled microphone must remain disabled");
+        EnhancedDvrBootstrap.onFactoryServiceDestroyed(); Handler.advance(20_000);
+        check(Handler.pending()==0,"Service destruction must cancel all recording work");
+        System.out.println("PASS disabled auto-record, key-off cancellation, manual stop, finite retries, and audio privacy");
     }
 
     static FakeConnection oldRequest, newRequest;

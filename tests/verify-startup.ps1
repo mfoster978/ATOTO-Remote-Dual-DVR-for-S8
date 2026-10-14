@@ -35,8 +35,9 @@ import java.util.*;
 public class Intent {
     public static final String ACTION_BOOT_COMPLETED="boot",ACTION_LOCKED_BOOT_COMPLETED="lockedboot";
     public static final int FLAG_ACTIVITY_NEW_TASK=1,FLAG_ACTIVITY_NO_ANIMATION=2,FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS=4;
-    public String action; public Map<String,Boolean> extras=new HashMap<>();
-    public Intent(String s){action=s;} public Intent(Context c,Class<?> cls){}
+    public String action,className; public Map<String,Boolean> extras=new HashMap<>();
+    public Intent(){} public Intent(String s){action=s;} public Intent(Context c,Class<?> cls){}
+    public Intent setClassName(String p,String c){className=c;return this;} public Intent putExtra(String s,String v){return this;}
     public String getAction(){return action;} public Intent setAction(String s){action=s;return this;}
     public Intent addFlags(int f){return this;} public Intent setPackage(String p){return this;}
     public Intent putExtra(String s,boolean b){extras.put(s,b);return this;}
@@ -59,10 +60,11 @@ import android.app.AlarmManager;
 import com.codex.hn7camerastream.CameraStreamService;
 public class Context {
     public static final int MODE_PRIVATE=0; public static final String ALARM_SERVICE="alarm";
-    public int starts,stops,vpn,failStarts; public AlarmManager alarms=new AlarmManager(); public SharedPreferences prefs=new SharedPreferences();
+    public int starts,stops,vpn,failStarts,factoryStarts; public AlarmManager alarms=new AlarmManager(); public SharedPreferences prefs=new SharedPreferences();
     public Context getApplicationContext(){return this;} public SharedPreferences getSharedPreferences(String s,int m){return prefs;}
+    public String getPackageName(){return "com.hcn.dvr";}
     public Object getSystemService(String s){return alarms;}
-    public Object startForegroundService(Intent i){starts++;if(failStarts>0){failStarts--;throw new IllegalStateException("not ready");}CameraStreamService.instance=new CameraStreamService();return null;}
+    public Object startForegroundService(Intent i){if("com.hcn.dvr.service.VideoService".equals(i.className)){factoryStarts++;return null;}starts++;if(failStarts>0){failStarts--;throw new IllegalStateException("not ready");}CameraStreamService.instance=new CameraStreamService();return null;}
     public boolean stopService(Intent i){stops++;CameraStreamService.instance=null;return true;} public void sendBroadcast(Intent i){vpn++;}
 }
 '@
@@ -95,6 +97,22 @@ public class AlarmManager {
     'com/codex/hn7camerastream/BootBootstrapActivity.java' = 'package com.codex.hn7camerastream; public class BootBootstrapActivity {}'
     'com/codex/hn7camerastream/StockDvrAccessGuard.java' = 'package com.codex.hn7camerastream; public class StockDvrAccessGuard { public static void clearSession(android.content.Context c){} }'
     'com/codex/hn7camerastream/StockDvrParkingLock.java' = 'package com.codex.hn7camerastream; public class StockDvrParkingLock { public static void disableSavedSetting(android.content.Context c){} }'
+    'com/hcn/dvr/utils/DataHelper.java' = @'
+package com.hcn.dvr.utils;
+import android.content.Context;
+public class DataHelper {
+    public static DataHelper instance=new DataHelper(); public boolean auto,usb,audio,failStart; public Controller cameraController=new Controller();
+    public static DataHelper getInstance(Context c){return instance;} public boolean getRecordAutoSave(){return auto;} public boolean isReadyForRecord(){return usb;}
+    public boolean getEnableAudioRecord(){return audio;} public String getRecordSavePath(){return "/storage/udisk1/dvr";}
+    public static class Controller {
+        public boolean opened,encoding; public int opens,starts; public String path;
+        public boolean isOpened(){return opened;} public boolean isEncoding(){return encoding;}
+        public void open(){opens++;} public void startEncoding(String p){starts++;path=p;if(!instance.failStart)encoding=true;}
+    }
+}
+'@
+    'com/hcn/dvr/utils/Utils.java' = 'package com.hcn.dvr.utils; public class Utils { public static boolean CAMERA_SIGNAL; }'
+    'com/hcn/dvr/manager/AudioCaptureManager.java' = 'package com.hcn.dvr.manager; public class AudioCaptureManager { public static int starts; public static AudioCaptureManager getInstance(){return new AudioCaptureManager();} public void startCapture(){starts++;} }'
     'android/view/View.java' = @'
 package android.view;
 import android.content.Context; import android.util.AttributeSet; import android.graphics.Canvas;
@@ -112,7 +130,7 @@ foreach ($entry in $Stubs.GetEnumerator()) {
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Path) | Out-Null
     [IO.File]::WriteAllText($Path, $entry.Value, $Utf8)
 }
-foreach ($Name in @('EnhancedDvrBootstrap', 'BootReceiver', 'AtotoAccState', 'MjpegView')) {
+foreach ($Name in @('EnhancedDvrBootstrap', 'BootReceiver', 'AtotoAccState', 'MjpegView', 'StockDvrAutoRecorder')) {
     Copy-Item -LiteralPath (Join-Path $ProjectRoot "app\src\com\codex\hn7camerastream\$Name.java") -Destination (Join-Path $Work "com\codex\hn7camerastream\$Name.java") -Force
 }
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'StartupRecoveryTest.java') -Destination (Join-Path $Work 'com\codex\hn7camerastream\StartupRecoveryTest.java') -Force

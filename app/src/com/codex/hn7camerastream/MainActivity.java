@@ -84,8 +84,8 @@ import java.util.Map;
 import java.util.Date;
 
 public class MainActivity extends Activity {
-    private static final String APP_VERSION_NAME = "2.0.4";
-    private static final int APP_VERSION_CODE = 20004;
+    private static final String APP_VERSION_NAME = "2.0.5";
+    private static final int APP_VERSION_CODE = 20005;
     private static final String GITHUB_REPOSITORY = "mfoster978/ATOTO-Remote-Dual-DVR-for-S8";
     private static final String GITHUB_REPOSITORY_URL = "https://github.com/" + GITHUB_REPOSITORY;
     private static final String GITHUB_LATEST_RELEASE_API = "https://api.github.com/repos/" + GITHUB_REPOSITORY + "/releases/latest";
@@ -1466,11 +1466,24 @@ public class MainActivity extends Activity {
                     dvrCameraName(selectedCamera));
             if (selectedCamera == 3) {
                 LinearLayout split = new LinearLayout(this);
-                split.setOrientation(LinearLayout.HORIZONTAL);
+                boolean portrait = getResources().getDisplayMetrics().heightPixels >
+                        getResources().getDisplayMetrics().widthPixels;
+                split.setOrientation(portrait ? LinearLayout.VERTICAL : LinearLayout.HORIZONTAL);
                 MjpegView front = new MjpegView(this);
                 MjpegView reverse = new MjpegView(this);
-                split.addView(front, new LinearLayout.LayoutParams(0, dp(360), 1));
-                split.addView(reverse, new LinearLayout.LayoutParams(0, dp(360), 1));
+                FrameLayout frontPane = phoneCameraPane(front, selectedDvrCamera == 2 ? "DVR CAMERA 2" : "FRONT DVR");
+                FrameLayout reversePane = phoneCameraPane(reverse, "REVERSE");
+                if (portrait) {
+                    split.addView(frontPane, matchWrap());
+                    LinearLayout.LayoutParams rearParams = matchWrap();
+                    rearParams.topMargin = dp(8);
+                    split.addView(reversePane, rearParams);
+                } else {
+                    split.addView(frontPane, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+                    LinearLayout.LayoutParams rearParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
+                    rearParams.leftMargin = dp(8);
+                    split.addView(reversePane, rearParams);
+                }
                 viewer.addView(split, matchWrap());
                 startPhoneMjpeg(front, selectedDvrCamera);
                 startPhoneMjpeg(reverse, 1);
@@ -1532,6 +1545,26 @@ public class MainActivity extends Activity {
         preferences.edit().putInt("phone_live_camera", selected)
                 .putInt("phone_live_primary_camera", primary).apply();
         showPhoneLive();
+    }
+
+    /** Size each split pane to the picture instead of a tall empty black column. */
+    private FrameLayout phoneCameraPane(MjpegView stream, String label) {
+        FrameLayout pane = new FrameLayout(this) {
+            @Override protected void onMeasure(int widthSpec, int heightSpec) {
+                int width = View.MeasureSpec.getSize(widthSpec);
+                int height = Math.max(1, width * 9 / 16);
+                super.onMeasure(widthSpec, View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY));
+            }
+        };
+        pane.setBackgroundColor(Color.BLACK);
+        pane.addView(stream, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        TextView name = text(label, 12, TEXT, true);
+        name.setPadding(dp(8), dp(5), dp(8), dp(5));
+        name.setBackgroundColor(Color.argb(190, 7, 17, 31));
+        pane.addView(name, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP | Gravity.START));
+        return pane;
     }
 
     private void startPhoneMjpeg(final MjpegView view, int cameraId) {

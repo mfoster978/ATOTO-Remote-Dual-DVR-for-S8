@@ -16,6 +16,8 @@ public final class EnhancedDvrBootstrap {
     private static Context application;
     private static AtotoAccState accState;
     private static long unknownAccDeadline;
+    private static boolean factoryServiceAlive;
+    private static long lastFactoryServiceRequest;
     private static final Runnable recovery = new Runnable() {
         @Override public void run() { reconcileSafely(); }
     };
@@ -25,6 +27,7 @@ public final class EnhancedDvrBootstrap {
     public static void initialize(Context context) {
         if (context == null) return;
         try {
+            if ("com.hcn.dvr.service.VideoService".equals(context.getClass().getName())) factoryServiceAlive = true;
             application = context.getApplicationContext();
             StockDvrParkingLock.disableSavedSetting(application);
             application.getSharedPreferences("settings", Context.MODE_PRIVATE).edit()
@@ -49,15 +52,35 @@ public final class EnhancedDvrBootstrap {
 
     public static void onFactoryServiceDestroyed() {
         handler.removeCallbacks(recovery);
+        StockDvrAutoRecorder.cancel();
+        factoryServiceAlive = false;
+        lastFactoryServiceRequest = 0;
         application = null;
     }
 
     static void stopForAccOff(Context context) {
         handler.removeCallbacks(recovery);
+        StockDvrAutoRecorder.cancel();
         try { BootReceiver.cancelCameraBootstrap(context); }
         catch (RuntimeException error) { Log.w(TAG, "Unable to cancel recovery alarms", error); }
         try { context.stopService(new Intent(context, CameraStreamService.class)); }
         catch (RuntimeException error) { Log.w(TAG, "Unable to stop remote service", error); }
+    }
+
+    /** Package replacement does not deliver the factory's BOOT_COMPLETED receiver. */
+    static void ensureFactoryService(Context context) {
+        if (context == null || !"com.hcn.dvr".equals(context.getPackageName()) || factoryServiceAlive ||
+                new AtotoAccState().read() != 1) return;
+        long now = SystemClock.elapsedRealtime();
+        if (lastFactoryServiceRequest != 0 && now - lastFactoryServiceRequest < 5_000L) return;
+        lastFactoryServiceRequest = now;
+        try {
+            context.startForegroundService(new Intent().setClassName("com.hcn.dvr", "com.hcn.dvr.service.VideoService")
+                    .putExtra("data", "boot"));
+            Log.i(TAG, "Requested factory DVR background service without opening its activity");
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Factory DVR background service not ready; will retry", error);
+        }
     }
 
     private static void reconcileSafely() {
@@ -77,6 +100,10 @@ public final class EnhancedDvrBootstrap {
         if (acc == 0) {
             stopForAccOff(app);
             return;
+        }
+        if (acc == 1) {
+            ensureFactoryService(app);
+            StockDvrAutoRecorder.onIgnitionReady(app);
         }
         if (acc == 1 && CameraStreamService.getRunningInstance() == null) {
             try {

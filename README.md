@@ -1,8 +1,8 @@
-# ATOTO Remote Dual DVR for S8
+# ATOTO Remote Dual DVR for S8 V4
 
-**PARKING MONITOR MODE IS AUTOMATICALLY DISABLED BY THIS UPDATE.** Version 2.0.4 checks the saved setting and turns it off if it was enabled; users do not have to remember to disable it first. Installing this update removes the ability to use or enable factory DVR parking monitoring. It is locked off because factory resets were reported during parking-mode testing, and that feature is still in development. Tapping its control displays an explanation. This release is for testing recording, playback, and remote viewing while the vehicle is on.
+**PARKING MONITOR MODE IS AUTOMATICALLY DISABLED BY THIS UPDATE.** Version 2.0.5 checks the saved setting and turns it off if it was enabled; users do not have to remember to disable it first. Installing this update removes the ability to use or enable factory DVR parking monitoring. It is locked off because factory resets were reported during parking-mode testing, and that feature is still in development. Tapping its control displays an explanation. This release is for testing recording, playback, and remote viewing while the vehicle is on.
 
-ATOTO Remote Dual DVR for S8 extends the factory DVR on compatible ATOTO S8 radios and adds a separate Android viewer for phones and tablets.
+ATOTO Remote Dual DVR for S8 V4 extends the factory DVR on compatible ATOTO S8 V4 radios and adds a separate Android viewer for phones and tablets.
 
 The release contains two APKs:
 
@@ -36,18 +36,18 @@ ATOTO's own [parking recording comparison](https://www.atotodirect.com/blogs/gui
 Recording and remote access are intended for use while the radio and vehicle are on. Parking monitor mode remains unavailable during development.
 
 - Remote live Front, DVR Camera 2, Reverse, and split-camera views through a private Tailscale connection.
-- Continuous reverse-camera H.264 MP4 recording alongside whichever shared DVR input ATOTO is recording.
+- Continuous reverse-camera H.264 MP4 recording alongside whichever shared DVR input ATOTO is recording. Reverse recording is off by default for new installations; enable it in the added settings to resume it automatically at key-on.
 - Reverse clips in the factory DVR recordings screen with an **R** badge, an **R** filter beside **ALL/F/C**, and native playback.
 - **REVERSE**, **SPLIT**, and **LINK** controls over the native DVR camera view.
 - Direct reverse-preview rendering on the radio with a transparent surface background so the camera picture is not covered by a black view.
 - Reverse capture reads the decoder's detected frame size, uses a matching supported capture size, and expands analog NTSC/PAL fields for viewing and recording. Digital zoom is reset and single/split previews fit the complete image.
-- Split view cycle: top/bottom, left/right, then off.
+- Split view cycle: top/bottom, left/right, then off. Both radio camera pictures keep matching proportions without stretching. The phone viewer stacks labeled previews in portrait and puts them side by side in landscape.
 - The factory camera button remains responsible for switching Front and DVR Camera 2.
 - Temporary remote Front/DVR2 selection, followed by restoration of the radio's saved input when remote viewing ends.
 - Optional cabin audio. The radio microphone switch remains the master privacy control for recordings and remote sound.
 - Setup QR, app connection PIN, browser username/password, and named vehicle profiles.
 - Optional owner PIN. One successful unlock opens every protected factory DVR and Camera Link screen for 10 minutes. Screen changes and briefly leaving the app do not ask again; the timer or a radio restart relocks it. Live camera viewing and the factory emergency-lock button remain available while locked.
-- Automatic recording recovery when the stock DVR opens before its camera signal state is initialized.
+- Background auto-record after boot, each key-on, and APK updates, using the factory recorder and its existing Auto recording switch. Startup restores the native DVR service first and waits for it to own the front/DVR2 camera. Startup retries wait for the camera signal and DVR USB drive without requiring the DVR screen to open. A manual recording stop is respected until the next ignition session.
 - Automatic Camera Link server recovery after ACC-on, plus phone live-view retries while the radio and Tailscale reconnect.
 - Signed one-click update checks for both APKs through GitHub Releases.
 - Android package-installer sessions on the radio for the bundled Tailscale installer and GitHub updates, avoiding the system-account file-grant error.
@@ -79,11 +79,11 @@ Camera images, private addresses, credentials, GPS coordinates, and personal rec
 
 ## Tested radio
 
-The project is being tested on the unit below. Version 2.0.4 disables parking monitoring so recording, playback, remote access, and the newly installed backup camera can be tested separately. Disabling parking does not establish the root cause of the earlier resets.
+The project is being tested on the S8 V4 unit below. Version 2.0.5 disables parking monitoring so recording, playback, remote access, and the newly installed backup camera can be tested separately. The owner reports that a key-off/restart test with parking disabled no longer factory-reset the radio. This is an observation on the tested unit, not proof of the original reset mechanism.
 
 | Property | Tested value |
 | --- | --- |
-| Radio family | ATOTO S8 |
+| Radio family | ATOTO S8 V4 |
 | Android model/device | `tb8768p1_64_bsp` |
 | Android version | Android 13 / API 33 |
 | ATOTO build | `HN7_2026.07.17.16.49` |
@@ -98,7 +98,7 @@ Other S8 models and firmware builds may use different camera IDs, storage mounts
 
 Installing this update disables factory DVR parking monitoring, including any previously saved enabled setting.
 
-1. Download **`ATOTO-S8-Enhanced-Stock-DVR-v2.0.4.apk`** from the latest GitHub Release.
+1. Download **`ATOTO-S8-Enhanced-Stock-DVR-v2.0.5.apk`** from the latest GitHub Release.
 2. Install it on the radio as an update to the existing ATOTO DVR. Do not uninstall the factory DVR first; the package data and original app identity must remain available.
 3. Open **DVR**. The familiar ATOTO camera screen and settings remain in place.
 4. Tap **LINK** to open the added side menu.
@@ -109,11 +109,11 @@ Installing this update disables factory DVR parking monitoring, including any pr
 
 Wireless ADB is needed only to install or service the radio APK when the normal package installer is unavailable. It is not required for daily recording, phone viewing, or playback after setup.
 
-The release uses version code `210004` and version name `2.0.4-camera-link` for the enhanced radio package so Android and the in-app updater recognize it as newer than v2.0.3. Update the viewer to v2.0.4 as well for its connection recovery fix.
+The release uses version code `210005` and version name `2.0.5-camera-link` for the enhanced radio package so Android and the in-app updater recognize it as newer than v2.0.4. Update the viewer to v2.0.5 as well for its improved dual-camera layout. Both apps can use Check for updates to download their matching APK from the latest regular GitHub release.
 
 ## Install on the phone or tablet
 
-1. Download **`Camera-Link-Viewer-v2.0.4.apk`** from the same release.
+1. Download **`Camera-Link-Viewer-v2.0.5.apk`** from the same release.
 2. Install Tailscale from the Play Store or use the installer offered by Camera Link Viewer.
 3. Sign in to the same tailnet as the radio and approve Android's VPN request.
 4. Open Camera Link Viewer and scan the setup QR shown on the radio.
@@ -178,7 +178,7 @@ The phone/tablet viewer can be built on Windows with Android SDK build tools, Po
 ./build.ps1
 ```
 
-The script verifies the pinned ZXing and official Tailscale dependencies, compiles the source, signs the viewer, and writes `Camera-Link-Viewer-v2.0.4.apk`.
+The script verifies the pinned ZXing and official Tailscale dependencies, compiles the source, signs the viewer, and writes `Camera-Link-Viewer-v2.0.5.apk`.
 
 The radio build is an additive patch applied to a compatible factory DVR APK:
 

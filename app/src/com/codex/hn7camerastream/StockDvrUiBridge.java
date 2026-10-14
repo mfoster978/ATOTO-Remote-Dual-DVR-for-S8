@@ -3,14 +3,18 @@ package com.codex.hn7camerastream;
 import android.app.Activity;
 import android.content.Intent;
 import android.graphics.Color;
+import android.graphics.Matrix;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.Build;
 import android.view.Gravity;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
+import android.view.TextureView;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowInsets;
 import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
@@ -78,6 +82,8 @@ public final class StockDvrUiBridge {
         private Button reverseButton;
         private Button splitButton;
         private View factoryCameraLayout;
+        private TextureView factoryPreview;
+        private int factoryTopMargin;
         private View ownerDockGate;
         private View ownerPinOverlay;
         private int mode = MODE_FRONT;
@@ -106,6 +112,18 @@ public final class StockDvrUiBridge {
             int cameraLayoutId = activity.getResources().getIdentifier(
                     "camera_layout", "id", activity.getPackageName());
             factoryCameraLayout = cameraLayoutId == 0 ? null : activity.findViewById(cameraLayoutId);
+            if (factoryCameraLayout != null && factoryCameraLayout.getLayoutParams() instanceof ViewGroup.MarginLayoutParams) {
+                factoryTopMargin = ((ViewGroup.MarginLayoutParams) factoryCameraLayout.getLayoutParams()).topMargin;
+            }
+            int previewId = activity.getResources().getIdentifier("surface_view", "id", activity.getPackageName());
+            View preview = previewId == 0 ? null : activity.findViewById(previewId);
+            if (preview instanceof TextureView) {
+                factoryPreview = (TextureView) preview;
+                factoryPreview.addOnLayoutChangeListener(new View.OnLayoutChangeListener() {
+                    @Override public void onLayoutChange(View view, int left, int top, int right, int bottom,
+                            int oldLeft, int oldTop, int oldRight, int oldBottom) { fitFactorySplitPreview(); }
+                });
+            }
 
             controls = new LinearLayout(activity);
             controls.setOrientation(LinearLayout.HORIZONTAL);
@@ -582,13 +600,31 @@ public final class StockDvrUiBridge {
             int height = ViewGroup.LayoutParams.MATCH_PARENT;
             int gravity = Gravity.CENTER;
             if (layoutMode == MODE_SPLIT_TOP_BOTTOM) {
-                height = activity.getResources().getDisplayMetrics().heightPixels / 2;
+                height = (viewportHeight(activity) - topInset(activity)) / 2;
                 gravity = Gravity.BOTTOM;
             } else if (layoutMode == MODE_SPLIT_LEFT_RIGHT) {
                 width = activity.getResources().getDisplayMetrics().widthPixels / 2;
-                gravity = Gravity.END;
+                height = viewportHeight(activity) - topInset(activity);
+                gravity = Gravity.TOP | Gravity.END;
             }
-            return new FrameLayout.LayoutParams(width, height, gravity);
+            FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(width, height, gravity);
+            if (layoutMode == MODE_SPLIT_LEFT_RIGHT) params.topMargin = topInset(activity);
+            return params;
+        }
+
+        private int viewportHeight(Activity activity) {
+            View content = activity.findViewById(android.R.id.content);
+            return content != null && content.getHeight() > 0 ? content.getHeight() :
+                    activity.getResources().getDisplayMetrics().heightPixels;
+        }
+
+        private int topInset(Activity activity) {
+            if (Build.VERSION.SDK_INT >= 30) {
+                WindowInsets insets = activity.getWindow().getDecorView().getRootWindowInsets();
+                if (insets != null) return insets.getInsets(WindowInsets.Type.statusBars()).top;
+            }
+            int resource = activity.getResources().getIdentifier("status_bar_height", "dimen", "android");
+            return resource == 0 ? 0 : activity.getResources().getDimensionPixelSize(resource);
         }
 
         private void resizeFactoryCamera(Activity activity, int layoutMode) {
@@ -598,15 +634,32 @@ public final class StockDvrUiBridge {
             params.width = layoutMode == MODE_SPLIT_LEFT_RIGHT ?
                     activity.getResources().getDisplayMetrics().widthPixels / 2 :
                     ViewGroup.LayoutParams.MATCH_PARENT;
-            params.height = layoutMode == MODE_SPLIT_TOP_BOTTOM ?
-                    activity.getResources().getDisplayMetrics().heightPixels / 2 :
-                    ViewGroup.LayoutParams.MATCH_PARENT;
+            int usableHeight = viewportHeight(activity) - topInset(activity);
+            params.height = layoutMode == MODE_SPLIT_TOP_BOTTOM ? usableHeight / 2 :
+                    layoutMode == MODE_SPLIT_LEFT_RIGHT ? usableHeight : ViewGroup.LayoutParams.MATCH_PARENT;
+            if (params instanceof ViewGroup.MarginLayoutParams) {
+                ((ViewGroup.MarginLayoutParams) params).topMargin =
+                        layoutMode == MODE_SPLIT_TOP_BOTTOM || layoutMode == MODE_SPLIT_LEFT_RIGHT ?
+                                topInset(activity) : factoryTopMargin;
+            }
             if (params instanceof FrameLayout.LayoutParams) {
                 ((FrameLayout.LayoutParams) params).gravity = layoutMode == MODE_SPLIT_LEFT_RIGHT ?
                         Gravity.START : layoutMode == MODE_SPLIT_TOP_BOTTOM ? Gravity.TOP : Gravity.CENTER;
             }
             factoryCameraLayout.setLayoutParams(params);
             factoryCameraLayout.requestLayout();
+            fitFactorySplitPreview();
+        }
+
+        private void fitFactorySplitPreview() {
+            if (factoryPreview == null || factoryPreview.getWidth() <= 0 || factoryPreview.getHeight() <= 0) return;
+            Matrix transform = new Matrix();
+            if (mode == MODE_SPLIT_TOP_BOTTOM || mode == MODE_SPLIT_LEFT_RIGHT) {
+                int width = factoryPreview.getWidth(), height = factoryPreview.getHeight();
+                float scale = Math.min(width / 1920f, height / 1080f);
+                transform.setScale(1920f * scale / width, 1080f * scale / height, width / 2f, height / 2f);
+            }
+            factoryPreview.setTransform(transform);
         }
 
         void detach() {

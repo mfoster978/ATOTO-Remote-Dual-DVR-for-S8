@@ -2251,6 +2251,16 @@ public class CameraStreamService extends Service implements SensorEventListener,
 
         boolean openBlocking() {
             if (camera != null) return true;
+            if ("com.hcn.dvr".equals(getPackageName())) {
+                FactoryDvrLoopbackClient.Health health = factoryDvr.health(900);
+                if (health.ok) {
+                    adoptFactoryBridge(health);
+                    return true;
+                }
+                EnhancedDvrBootstrap.ensureFactoryService(CameraStreamService.this);
+                cameraError = "Waiting for the factory DVR camera to become ready";
+                return false;
+            }
             if (inputChannel < 0 && !selectInputBlocking(configuredDvrInput())) return false;
             final CountDownLatch done = new CountDownLatch(1);
             final AtomicBoolean opened = new AtomicBoolean(false);
