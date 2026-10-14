@@ -72,7 +72,8 @@ public final class StockDvrUiBridge {
 
         private final WeakReference<Activity> activityRef;
         private final Handler main = new Handler(Looper.getMainLooper());
-        private SurfaceView reverseSurface;
+        private FitSurfaceView reverseSurface;
+        private FrameLayout reverseHost;
         private LinearLayout controls;
         private Button reverseButton;
         private Button splitButton;
@@ -89,12 +90,18 @@ public final class StockDvrUiBridge {
             final Activity activity = activityRef.get();
             if (activity == null) return;
 
-            reverseSurface = new SurfaceView(activity);
-            reverseSurface.setBackgroundColor(Color.BLACK);
+            reverseHost = new FrameLayout(activity);
+            reverseHost.setBackgroundColor(Color.BLACK);
+            reverseSurface = new FitSurfaceView(activity);
+            // The SurfaceView punches a hole through the activity window for
+            // camera pixels. An opaque view background paints over that hole.
+            reverseSurface.setBackgroundColor(Color.TRANSPARENT);
             reverseSurface.setZOrderMediaOverlay(true);
-            reverseSurface.setVisibility(View.GONE);
+            reverseHost.setVisibility(View.GONE);
             reverseSurface.getHolder().addCallback(this);
-            activity.addContentView(reverseSurface, reverseLayout(activity, MODE_REVERSE));
+            reverseHost.addView(reverseSurface, new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.CENTER));
+            activity.addContentView(reverseHost, reverseLayout(activity, MODE_REVERSE));
 
             int cameraLayoutId = activity.getResources().getIdentifier(
                     "camera_layout", "id", activity.getPackageName());
@@ -164,9 +171,9 @@ public final class StockDvrUiBridge {
             updateControlState();
             attachGeneration++;
             resizeFactoryCamera(activity, requestedMode);
-            reverseSurface.setLayoutParams(reverseLayout(activity, requestedMode));
-            reverseSurface.setVisibility(View.VISIBLE);
-            reverseSurface.bringToFront();
+            reverseHost.setLayoutParams(reverseLayout(activity, requestedMode));
+            reverseHost.setVisibility(View.VISIBLE);
+            reverseHost.bringToFront();
             if (controls != null) controls.bringToFront();
             if (ownerDockGate != null && ownerDockGate.getVisibility() == View.VISIBLE) {
                 ownerDockGate.bringToFront();
@@ -185,7 +192,7 @@ public final class StockDvrUiBridge {
             if (reverseSurface != null) {
                 CameraStreamService service = CameraStreamService.getRunningInstance();
                 if (service != null) service.detachRadioPreview(reverseSurface.getHolder(), 1);
-                reverseSurface.setVisibility(View.GONE);
+                reverseHost.setVisibility(View.GONE);
             }
         }
 
@@ -259,12 +266,56 @@ public final class StockDvrUiBridge {
             CameraStreamService service = CameraStreamService.getRunningInstance();
             if (service != null && reverseSurface.getHolder().getSurface().isValid()) {
                 service.attachRadioPreview(reverseSurface.getHolder(), 1);
+                refreshReverseAspect(generation, 0);
                 return;
             }
             if (attempt < 40) {
                 main.postDelayed(new Runnable() {
                     @Override public void run() { attachReverseWhenReady(generation, attempt + 1); }
                 }, 100L);
+            }
+        }
+
+        private void refreshReverseAspect(final int generation, final int attempt) {
+            if (generation != attachGeneration || mode == MODE_FRONT || reverseSurface == null) return;
+            CameraStreamService service = CameraStreamService.getRunningInstance();
+            if (service != null && service.getReversePreviewWidth() > 0 && service.getReversePreviewHeight() > 0) {
+                    reverseSurface.setAspectRatio(service.getReversePreviewWidth(), service.getReversePreviewHeight(),
+                            service.getReverseBufferWidth(), service.getReverseBufferHeight());
+                return;
+            }
+            if (attempt < 30) main.postDelayed(new Runnable() {
+                @Override public void run() { refreshReverseAspect(generation, attempt + 1); }
+            }, 100L);
+        }
+
+        /** Shows the whole frame within single or split panes instead of cropping it. */
+        private static final class FitSurfaceView extends SurfaceView {
+            private int cameraWidth = 16;
+            private int cameraHeight = 9;
+            private int bufferWidth;
+            private int bufferHeight;
+            FitSurfaceView(Activity activity) { super(activity); }
+            void setAspectRatio(int width, int height, int rawWidth, int rawHeight) {
+                if (cameraWidth == width && cameraHeight == height && bufferWidth == rawWidth && bufferHeight == rawHeight) return;
+                cameraWidth = width;
+                cameraHeight = height;
+                bufferWidth = rawWidth;
+                bufferHeight = rawHeight;
+                getHolder().setFixedSize(rawWidth, rawHeight);
+                requestLayout();
+            }
+            @Override protected void onMeasure(int widthSpec, int heightSpec) {
+                int width = MeasureSpec.getSize(widthSpec);
+                int height = MeasureSpec.getSize(heightSpec);
+                if (width > 0 && height > 0) {
+                    if ((long) width * cameraHeight > (long) height * cameraWidth) {
+                        width = (int) ((long) height * cameraWidth / cameraHeight);
+                    } else {
+                        height = (int) ((long) width * cameraHeight / cameraWidth);
+                    }
+                }
+                setMeasuredDimension(width, height);
             }
         }
 

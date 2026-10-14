@@ -84,8 +84,8 @@ import java.util.Map;
 import java.util.Date;
 
 public class MainActivity extends Activity {
-    private static final String APP_VERSION_NAME = "2.0.3";
-    private static final int APP_VERSION_CODE = 20003;
+    private static final String APP_VERSION_NAME = "2.0.4";
+    private static final int APP_VERSION_CODE = 20004;
     private static final String GITHUB_REPOSITORY = "mfoster978/ATOTO-Remote-Dual-DVR-for-S8";
     private static final String GITHUB_REPOSITORY_URL = "https://github.com/" + GITHUB_REPOSITORY;
     private static final String GITHUB_LATEST_RELEASE_API = "https://api.github.com/repos/" + GITHUB_REPOSITORY + "/releases/latest";
@@ -925,6 +925,11 @@ public class MainActivity extends Activity {
         addAction(card, "Install or open Tailscale", PRIMARY, new View.OnClickListener() {
             @Override public void onClick(View view) { openTailscale(); }
         });
+        if ("com.hcn.dvr".equals(getPackageName()) && isPackageInstalled(TAILSCALE_PACKAGE)) {
+            addAction(card, "Install bundled Tailscale APK", SURFACE_2, new View.OnClickListener() {
+                @Override public void onClick(View view) { installBundledTailscale(); }
+            });
+        }
         addAction(card, "Open VPN settings", SURFACE_2, new View.OnClickListener() {
             @Override public void onClick(View view) { openVpnSettings(); }
         });
@@ -2793,6 +2798,11 @@ public class MainActivity extends Activity {
                     Uri.parse("package:" + getPackageName())));
             return;
         }
+        if ("com.hcn.dvr".equals(getPackageName())) {
+            launchingTailscale = true;
+            RadioApkInstaller.install(this, update, getPackageName());
+            return;
+        }
         Uri apk = Uri.parse("content://" + getPackageName() + ".apks/update.apk");
         Intent install = new Intent(Intent.ACTION_VIEW);
         install.setDataAndType(apk, "application/vnd.android.package-archive");
@@ -2955,6 +2965,12 @@ public class MainActivity extends Activity {
     }
 
     private void launchBundledTailscaleInstaller() {
+        if ("com.hcn.dvr".equals(getPackageName())) {
+            launchingTailscale = true;
+            RadioApkInstaller.install(this, new File(getCacheDir(), BundledApkProvider.FILE_NAME),
+                    TAILSCALE_PACKAGE);
+            return;
+        }
         Uri apk = Uri.parse("content://" + getPackageName() + ".apks/tailscale.apk");
         Intent install = new Intent(Intent.ACTION_VIEW);
         install.setDataAndType(apk, "application/vnd.android.package-archive");
@@ -3054,6 +3070,13 @@ public class MainActivity extends Activity {
     }
 
     private void launchFactoryDvrIntegrationInstaller() {
+        if ("com.hcn.dvr".equals(getPackageName())) {
+            preferences.edit().putBoolean("factory_dvr_installer_open", true).apply();
+            launchingTailscale = true;
+            RadioApkInstaller.install(this, new File(getCacheDir(), BundledApkProvider.FACTORY_DVR_FILE_NAME),
+                    "com.hcn.dvr");
+            return;
+        }
         Uri apk = Uri.parse("content://" + getPackageName() +
                 ".apks/factory-dvr-integration.apk");
         Intent install = new Intent(Intent.ACTION_VIEW);

@@ -31,7 +31,8 @@ public final class StockDvrSettingsBridge {
     private StockDvrSettingsBridge() { }
 
     /** Called from the patched SettingsFragment after the factory view is fully initialized. */
-    public static void attach(Object ignoredFragment, View root) {
+    public static void attach(Object fragment, View root) {
+        StockDvrParkingLock.apply(fragment);
         if (!(root instanceof ScrollView)) return;
         synchronized (ATTACHED) {
             if (ATTACHED.containsKey(root)) return;

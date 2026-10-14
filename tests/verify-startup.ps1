@@ -94,6 +94,7 @@ public class AlarmManager {
     'com/codex/hn7camerastream/CameraStreamService.java' = 'package com.codex.hn7camerastream; public class CameraStreamService { public static final String ACTION_BOOTSTRAP_RETRY="retry"; public static CameraStreamService instance; public static CameraStreamService getRunningInstance(){return instance;} }'
     'com/codex/hn7camerastream/BootBootstrapActivity.java' = 'package com.codex.hn7camerastream; public class BootBootstrapActivity {}'
     'com/codex/hn7camerastream/StockDvrAccessGuard.java' = 'package com.codex.hn7camerastream; public class StockDvrAccessGuard { public static void clearSession(android.content.Context c){} }'
+    'com/codex/hn7camerastream/StockDvrParkingLock.java' = 'package com.codex.hn7camerastream; public class StockDvrParkingLock { public static void disableSavedSetting(android.content.Context c){} }'
     'android/view/View.java' = @'
 package android.view;
 import android.content.Context; import android.util.AttributeSet; import android.graphics.Canvas;

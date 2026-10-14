@@ -26,6 +26,7 @@ public final class EnhancedDvrBootstrap {
         if (context == null) return;
         try {
             application = context.getApplicationContext();
+            StockDvrParkingLock.disableSavedSetting(application);
             application.getSharedPreferences("settings", Context.MODE_PRIVATE).edit()
                     .putString("device_mode", "radio").apply();
             if (accState == null) accState = new AtotoAccState();

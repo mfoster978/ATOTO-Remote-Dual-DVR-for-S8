@@ -16,8 +16,8 @@ $ClassesJar = Join-Path $Out 'camera-link-enhancements.jar'
 $Unsigned = Join-Path $Out 'enhanced-stock-dvr-unsigned.apk'
 $WithDex = Join-Path $Out 'enhanced-stock-dvr-with-dex.apk'
 $Aligned = Join-Path $Out 'enhanced-stock-dvr-aligned.apk'
-$Signed = Join-Path $Out 'ATOTO-S8-Enhanced-Stock-DVR-v2.0.3.apk'
-$Published = Join-Path $ProjectRoot 'ATOTO-S8-Enhanced-Stock-DVR-v2.0.3.apk'
+$Signed = Join-Path $Out 'ATOTO-S8-Enhanced-Stock-DVR-v2.0.4.apk'
+$Published = Join-Path $ProjectRoot 'ATOTO-S8-Enhanced-Stock-DVR-v2.0.4.apk'
 $ZxingJar = Join-Path $ProjectRoot 'app\lib\zxing-core-3.5.3.jar'
 $ExpectedCertificate = 'c8a2e9bccf597c2fb6dc66bee293fc13f2fc47ec77bc6b2b0d52c11f51192ab8'
 
@@ -59,8 +59,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Apktool decode failed.' }
 
 $ApktoolYaml = Join-Path $DecodeRoot 'apktool.yml'
 $Yaml = Get-Content -Raw -LiteralPath $ApktoolYaml
-$Yaml = $Yaml -replace '(?m)^  versionCode:.*$', '  versionCode: 210003'
-$Yaml = $Yaml -replace '(?m)^  versionName:.*$', '  versionName: 2.0.3-camera-link'
+$Yaml = $Yaml -replace '(?m)^  versionCode:.*$', '  versionCode: 210004'
+$Yaml = $Yaml -replace '(?m)^  versionName:.*$', '  versionName: 2.0.4-camera-link'
 [IO.File]::WriteAllText($ApktoolYaml, $Yaml, $Utf8NoBom)
 
 $Manifest = Join-Path $DecodeRoot 'AndroidManifest.xml'
@@ -88,6 +88,7 @@ if ($ManifestText -notmatch 'android.permission.CAMERA') {
 }
 $ManifestText = $ManifestText -replace '<application ', '<application android:allowBackup="false" android:requestLegacyExternalStorage="true" android:usesCleartextTraffic="true" '
 $Components = @'
+        <receiver android:name="com.codex.hn7camerastream.RadioApkInstaller" android:exported="false"/>
         <activity android:name="com.codex.hn7camerastream.MainActivity" android:exported="false" android:theme="@android:style/Theme.Material.Light.NoActionBar"/>
         <activity android:name="com.codex.hn7camerastream.QrScannerActivity" android:exported="false" android:screenOrientation="portrait" android:theme="@android:style/Theme.Material.Light.NoActionBar"/>
         <activity android:name="com.codex.hn7camerastream.BootBootstrapActivity" android:excludeFromRecents="true" android:exported="false" android:finishOnTaskLaunch="true" android:noHistory="true" android:showWhenLocked="true" android:theme="@android:style/Theme.Translucent.NoTitleBar"/>
@@ -209,7 +210,45 @@ $SettingsPatch = '    invoke-direct {p0, p2}, Lcom/hcn/dvr/SettingsFragment;->up
     '    invoke-static {p0, p1}, Lcom/codex/hn7camerastream/StockDvrSettingsBridge;->attach(Ljava/lang/Object;Landroid/view/View;)V' + [Environment]::NewLine + [Environment]::NewLine +
     '    return-object p1'
 $SettingsSmali = $SettingsSmali.Replace($SettingsNeedle, $SettingsPatch)
+
+# Keep the switch OFF and the explanation popup active after native UI refreshes.
+$ParkingMaskMatch = [regex]::Match($SettingsSmali, '(?ms)^\.method private updateParkingMask\(\)V\r?\n.*?^\.end method')
+if (-not $ParkingMaskMatch.Success) { throw 'Factory parking-mask refresh was not found.' }
+$ParkingMaskMethod = $ParkingMaskMatch.Value
+$ParkingMaskReturn = [regex]::Matches($ParkingMaskMethod, '(?m)^    return-void\r?$')
+if ($ParkingMaskReturn.Count -ne 1) { throw 'Factory parking-mask refresh has an unexpected return layout.' }
+$ParkingMaskMethod = $ParkingMaskMethod.Insert($ParkingMaskReturn[0].Index,
+    '    invoke-static {p0}, Lcom/codex/hn7camerastream/StockDvrParkingLock;->apply(Ljava/lang/Object;)V' +
+    [Environment]::NewLine + [Environment]::NewLine)
+$SettingsSmali = $SettingsSmali.Remove($ParkingMaskMatch.Index, $ParkingMaskMatch.Length).Insert($ParkingMaskMatch.Index, $ParkingMaskMethod)
 [IO.File]::WriteAllText($SettingsSmaliPath, $SettingsSmali, $Utf8NoBom)
+
+# A UI lock alone would not cover restored settings or background callers.
+# All native parking queries now return OFF and every setter persists OFF.
+# Duration, voltage, MCU commands, and the native sentry implementation are retained.
+$DataHelperPath = Join-Path $DecodeRoot 'smali\com\hcn\dvr\utils\DataHelper.smali'
+$DataHelperSmali = Get-Content -Raw -LiteralPath $DataHelperPath
+$ParkingGetter = [regex]::Match($DataHelperSmali, '(?ms)^\.method public getSentryModeEnable\(\)Z\r?\n.*?^\.end method')
+if (-not $ParkingGetter.Success) { throw 'Factory parking enable getter was not found.' }
+$LockedGetter = @'
+.method public getSentryModeEnable()Z
+    .locals 1
+
+    # Parking monitoring is unavailable in this release.
+    const/4 v0, 0x0
+
+    return v0
+.end method
+'@
+$DataHelperSmali = $DataHelperSmali.Remove($ParkingGetter.Index, $ParkingGetter.Length).Insert($ParkingGetter.Index, $LockedGetter.TrimEnd())
+$ParkingSetter = [regex]::Match($DataHelperSmali, '(?ms)^\.method public setSentryModeEnable\(Z\)V\r?\n.*?^\.end method')
+if (-not $ParkingSetter.Success) { throw 'Factory parking enable setter was not found.' }
+$SetterCall = '    invoke-direct {p0, v0, p1}, Lcom/hcn/dvr/utils/DataHelper;->setIntValue(Ljava/lang/String;I)V'
+if (-not $ParkingSetter.Value.Contains($SetterCall)) { throw 'Factory parking enable setter layout was unexpected.' }
+$LockedSetter = $ParkingSetter.Value.Replace($SetterCall,
+    '    const/4 p1, 0x0' + [Environment]::NewLine + [Environment]::NewLine + $SetterCall)
+$DataHelperSmali = $DataHelperSmali.Remove($ParkingSetter.Index, $ParkingSetter.Length).Insert($ParkingSetter.Index, $LockedSetter)
+[IO.File]::WriteAllText($DataHelperPath, $DataHelperSmali, $Utf8NoBom)
 
 $FolderActivitySmaliPath = Join-Path $DecodeRoot 'smali\com\hcn\dvr\FolderPlaybackActivity.smali'
 $FolderActivitySmali = Get-Content -Raw -LiteralPath $FolderActivitySmaliPath
@@ -377,7 +416,7 @@ if ($LASTEXITCODE -ne 0 -or $SignedCertificate -notmatch "SHA-256 digest: $Expec
     throw 'Enhanced stock DVR signature verification failed.'
 }
 $Badging = (& (Join-Path $BuildTools 'aapt2.exe') dump badging $Signed) -join [Environment]::NewLine
-if ($LASTEXITCODE -ne 0 -or $Badging -notmatch "package: name='com.hcn.dvr' versionCode='210003' versionName='2.0.3-camera-link'") {
+if ($LASTEXITCODE -ne 0 -or $Badging -notmatch "package: name='com.hcn.dvr' versionCode='210004' versionName='2.0.4-camera-link'") {
     throw 'Enhanced APK did not preserve the package or apply the expected high version.'
 }
 $ArchiveEntries = (& (Join-Path $JavaRoot 'bin\jar.exe') tf $Signed) -join [Environment]::NewLine

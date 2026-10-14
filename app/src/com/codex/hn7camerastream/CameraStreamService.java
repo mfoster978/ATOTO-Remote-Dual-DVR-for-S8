@@ -138,6 +138,8 @@ public class CameraStreamService extends Service implements SensorEventListener,
     private volatile int activeCamera = -1;
     private volatile int frameWidth;
     private volatile int frameHeight;
+    private volatile int reverseBufferWidth;
+    private volatile int reverseBufferHeight;
     private volatile long lastFrameEncoded;
     private volatile boolean recording;
     private volatile boolean recordingRequested;
@@ -517,6 +519,10 @@ public class CameraStreamService extends Service implements SensorEventListener,
     }
 
     public boolean isIgnitionOn() { return ignitionOn; }
+    public int getReversePreviewWidth() { return frameWidth; }
+    public int getReversePreviewHeight() { return frameHeight; }
+    public int getReverseBufferWidth() { return reverseBufferWidth; }
+    public int getReverseBufferHeight() { return reverseBufferHeight; }
     public boolean isFactoryDvrIntegrationReady() {
         return frontPipeline != null && frontPipeline.factoryBridgeActive;
     }
@@ -786,7 +792,7 @@ public class CameraStreamService extends Service implements SensorEventListener,
             } else {
                 if (surfaceTexture != null) try { surfaceTexture.release(); } catch (Exception ignored) { }
                 surfaceTexture = new SurfaceTexture(8765);
-                surfaceTexture.setDefaultBufferSize(Math.max(1, frameWidth), Math.max(1, frameHeight));
+                surfaceTexture.setDefaultBufferSize(Math.max(1, reverseBufferWidth), Math.max(1, reverseBufferHeight));
                 target.setPreviewTexture(surfaceTexture);
             }
             target.startPreview();
@@ -1332,26 +1338,53 @@ public class CameraStreamService extends Service implements SensorEventListener,
                     Camera candidate = Camera.open(cameraId);
                     Camera.Parameters parameters = candidate.getParameters();
                     Camera.Size selected = chooseSize(parameters.getSupportedPreviewSizes());
+                    int[] detected = AtotoReverseGeometry.detectedSize();
+                    if (detected != null) {
+                        for (Camera.Size supported : parameters.getSupportedPreviewSizes()) {
+                            if (supported.width == detected[0] && supported.height == detected[1]) {
+                                selected = supported;
+                                break;
+                            }
+                        }
+                    }
                     parameters.setPreviewSize(selected.width, selected.height);
                     parameters.setPreviewFormat(ImageFormat.NV21);
+                    if (parameters.isZoomSupported()) parameters.setZoom(0);
                     candidate.setParameters(parameters);
-                    frameWidth = selected.width;
-                    frameHeight = selected.height;
+                    // Use the HAL's accepted size for NV21 buffers, recording,
+                    // and the display rather than assuming it accepted the request.
+                    Camera.Parameters accepted = candidate.getParameters();
+                    Camera.Size actual = accepted.getPreviewSize();
+                    reverseBufferWidth = actual.width;
+                    reverseBufferHeight = actual.height;
+                    frameWidth = actual.width;
+                    frameHeight = AtotoReverseGeometry.isAnalogField(actual.width, actual.height) ?
+                            ((actual.width * 9 / 16) & ~1) : actual.height;
+                    Log.i(TAG, "Reverse preview requested " + selected.width + "x" + selected.height +
+                            ", accepted " + actual.width + "x" + actual.height +
+                            ", output " + frameWidth + "x" + frameHeight);
                     SurfaceHolder holder = reversePreviewHolder;
                     if (holder != null && holder.getSurface() != null && holder.getSurface().isValid()) {
                         candidate.setPreviewDisplay(holder);
                     } else {
                         surfaceTexture = new SurfaceTexture(8765);
-                        surfaceTexture.setDefaultBufferSize(frameWidth, frameHeight);
+                        surfaceTexture.setDefaultBufferSize(reverseBufferWidth, reverseBufferHeight);
                         candidate.setPreviewTexture(surfaceTexture);
                     }
                     candidate.setPreviewCallback(new Camera.PreviewCallback() {
                         @Override public void onPreviewFrame(byte[] data, Camera source) {
-                            if (recording) queueFrameForRecording(data, frameWidth, frameHeight);
                             long now = System.currentTimeMillis();
-                            if (now - lastFrameEncoded < FRAME_INTERVAL_MS || !encoding.compareAndSet(false, true)) return;
+                            boolean encodeJpeg = now - lastFrameEncoded >= FRAME_INTERVAL_MS && encoding.compareAndSet(false, true);
+                            if (!recording && !encodeJpeg) return;
+                            final byte[] copy = AtotoReverseGeometry.normalize(data, reverseBufferWidth,
+                                    reverseBufferHeight, frameHeight);
+                            if (copy == null) {
+                                if (encodeJpeg) encoding.set(false);
+                                return;
+                            }
+                            if (recording) queueFrameForRecording(copy, frameWidth, frameHeight);
+                            if (!encodeJpeg) return;
                             lastFrameEncoded = now;
-                            final byte[] copy = data.clone();
                             final int width = frameWidth;
                             final int height = frameHeight;
                             encoder.execute(new Runnable() {
@@ -1405,7 +1438,7 @@ public class CameraStreamService extends Service implements SensorEventListener,
             long pixels = (long) size.width * size.height;
             long target = 1280L * 720L;
             long score = Math.abs(pixels - target);
-            if (size.width > 1920 || size.height > 1080) score += 10000000L;
+            if (size.width > 1280 || size.height > 720) score += 10000000L;
             if (score < bestScore) {
                 best = size;
                 bestScore = score;
@@ -1880,6 +1913,8 @@ public class CameraStreamService extends Service implements SensorEventListener,
             activeCamera = -1;
             frameWidth = 0;
             frameHeight = 0;
+            reverseBufferWidth = 0;
+            reverseBufferHeight = 0;
             latestJpeg = null;
         }
         updateNotification("Waiting for a viewer");
