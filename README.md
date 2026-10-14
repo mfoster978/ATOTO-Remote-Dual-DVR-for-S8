@@ -1,6 +1,9 @@
-# ATOTO Remote Dual DVR for S8 V4
+# BROKEN — ATOTO Remote Dual DVR for S8 V4
 
-**PARKING MONITOR MODE IS AUTOMATICALLY DISABLED BY THIS UPDATE.** Version 2.0.6 checks the saved setting and turns it off if it was enabled; users do not have to remember to disable it first. Installing this update removes the ability to use or enable factory DVR parking monitoring. It is locked off because factory resets were reported during parking-mode testing, and that feature is still in development. Tapping its control displays an explanation. This release is for testing recording, playback, and remote viewing while the vehicle is on.
+> [!CAUTION]
+> **DO NOT INSTALL THE RADIO APK. IT CAN CAUSE THE ATOTO S8 V4 TO FACTORY RESET.** The tested radio factory-reset again during normal driving with parking monitor mode disabled. Disabling parking mode did not solve the underlying problem. The cause is not known, there is no safe radio release, and development is paused while the failure is investigated. A factory reset erases installed apps, settings, and user data from the radio.
+
+All GitHub releases are marked as broken prereleases so the in-app updater will not advertise them as a stable update. The source and test history remain public for diagnosis. The separate phone viewer cannot provide camera access without the radio component and should not be treated as a working standalone release.
 
 ATOTO Remote Dual DVR for S8 V4 extends the factory DVR on compatible ATOTO S8 V4 radios and adds a separate Android viewer for phones and tablets.
 
@@ -91,7 +94,7 @@ Camera views are included with the owner's permission. Private connection addres
 
 ## Tested radio
 
-The project is being tested on the S8 V4 unit below. Version 2.0.6 disables parking monitoring so recording, playback, remote access, and the newly installed backup camera can be tested separately. The owner reports that a key-off/restart test with parking disabled no longer factory-reset the radio. This is an observation on the tested unit, not proof of the original reset mechanism.
+The project was tested on the S8 V4 unit below. Version 2.0.6 disabled parking monitoring, but the radio later factory-reset again during normal driving. That result disproved the working assumption that keeping parking mode off was sufficient to prevent resets.
 
 | Property | Tested value |
 | --- | --- |
@@ -108,7 +111,9 @@ Other S8 models and firmware builds may use different camera IDs, storage mounts
 
 ## Install on the radio
 
-Installing this update disables factory DVR parking monitoring, including any previously saved enabled setting.
+**Installation is disabled. Do not install any radio APK from this repository. No published version is considered safe.**
+
+The steps below are retained only as historical documentation for investigation and must not be followed on a working radio.
 
 1. Download **`ATOTO-S8-Enhanced-Stock-DVR-v2.0.6.apk`** from the latest GitHub Release.
 2. Install it on the radio as an update to the existing ATOTO DVR. Do not uninstall the factory DVR first; the package data and original app identity must remain available.
@@ -124,6 +129,8 @@ Wireless ADB is needed only to install or service the radio APK when the normal 
 The release uses version code `210006` and version name `2.0.6-camera-link` for the enhanced radio package so Android and the in-app updater recognize it as newer than v2.0.4. Update the viewer to v2.0.6 as well for its improved dual-camera layout. Both apps can use Check for updates to download their matching APK from the latest regular GitHub release.
 
 ## Install on the phone or tablet
+
+The phone viewer depends on the unsafe radio component. It is not currently a usable standalone product.
 
 1. Download **`Camera-Link-Viewer-v2.0.6.apk`** from the same release.
 2. Install Tailscale from the Play Store or use the installer offered by Camera Link Viewer.
@@ -165,9 +172,9 @@ The radio connection page shows the website username and password. The app conne
 
 ## Parking and power behavior
 
-This update removes parking-monitor functionality from the enhanced factory DVR for now. The parking switch stays off and opens a popup explaining that parking mode is disabled due to factory-reset issues and is still in development. Parking duration and voltage controls cannot enable it. The saved `sentry_mode_enable` flag is cleared, the factory getter always returns false, and its setter persists false, so restoring an enabled setting cannot bypass the lock.
+Version 2.0.6 removes parking-monitor functionality from the enhanced factory DVR. The parking switch stays off, parking duration and voltage controls cannot enable it, and the saved `sentry_mode_enable` flag is cleared. Despite those controls, the tested radio later factory-reset again during normal driving.
 
-The native sentry implementation, battery thresholds, parking duration values, and MCU commands are retained without new keep-awake or power commands. Their parking activation path is disabled. Recording and remote live viewing while the vehicle is off are therefore unavailable in this release. Disabling parking is a workaround for testing the other features; it does not prove the cause of the previous factory resets.
+The native sentry implementation, battery thresholds, parking duration values, and MCU commands were retained without new keep-awake or power commands, and their parking activation path was disabled. This did not make the modified privileged DVR package safe. The root cause of the resets remains unknown.
 
 At ACC-on, the added code starts the server from the factory DVR's background service, observes its ignition broadcast, checks for a missing service every 10 seconds, retries Tailscale every 20 seconds while its VPN interface is missing, and performs non-waking startup recovery checks through 180 seconds. Custom recovery work is canceled at ACC-off.
 
